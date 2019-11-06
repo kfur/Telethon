@@ -7,6 +7,8 @@ import re
 import typing
 import inspect
 from io import BytesIO
+from urllib import request as req
+import ffmpeg
 
 from .. import utils, helpers, hints
 from ..tl import types, functions, custom
@@ -422,7 +424,7 @@ class UploadMethods:
             part_size_kb: float = None,
             file_name: str = None,
             use_cache: type = None,
-            progress_callback: 'hints.ProgressCallback' = None) -> 'types.TypeInputFile':
+            progress_callback: 'hints.ProgressCallback' = None, protocol='https', file_size=None) -> 'types.TypeInputFile':
         """
         Uploads a file to Telegram's servers, without sending it.
 
@@ -483,26 +485,11 @@ class UploadMethods:
         if isinstance(file, (types.InputFile, types.InputFileBig)):
             return file  # Already uploaded
 
-        if not file_name and getattr(file, 'name', None):
-            file_name = file.name
-
-        if isinstance(file, str):
-            file_size = os.path.getsize(file)
-        elif isinstance(file, bytes):
-            file_size = len(file)
-        else:
-            if isinstance(file, io.IOBase) and file.seekable():
-                pos = file.tell()
-            else:
-                pos = None
-
-            # TODO Don't load the entire file in memory always
-            data = file.read()
-            if pos is not None:
-                file.seek(pos)
-
-            file = data
-            file_size = len(file)
+        # if not file_name and getattr(file, 'name', None):
+        #     file_name = file.name
+        if file_size is None:
+            stream = req.urlopen(file)
+            file_size = int(stream.headers['Content-Length'])
 
         # File will now either be a string or bytes
         if not part_size_kb:
@@ -539,41 +526,87 @@ class UploadMethods:
             # As this needs to be done always for small files,
             # might as well do it before anything else and
             # check the cache.
-            if isinstance(file, str):
-                with open(file, 'rb') as stream:
-                    file = stream.read()
+            # if isinstance(file, str):
+            #     with open(file, 'rb') as stream:
+            #         file = stream.read()
+
+            if 'm3u8' in protocol:
+                out_proc = (
+                    ffmpeg.input(file).output('pipe:',
+                                              format='mp4',
+                                              vcodec='copy',
+                                              acodec='copy',
+                                              movflags='frag_keyframe+empty_moov',
+                                              **{'bsf:a': 'aac_adtstoasc'}).run_async(pipe_stdout=True)
+                )
+                file = out_proc.stdout.read()
+            else:
+                with req.urlopen(file) as resp:
+                    file = resp.read()
             hash_md5.update(file)
 
         part_count = (file_size + part_size - 1) // part_size
         self._log[__name__].info('Uploading file of %d bytes in %d chunks of %d',
                                  file_size, part_count, part_size)
 
-        with open(file, 'rb') if isinstance(file, str) else BytesIO(file)\
-                as stream:
-            for part_index in range(part_count):
-                # Read the file by in chunks of size part_size
+        # with open(file, 'rb') if isinstance(file, str) else BytesIO(file)\
+        #         as stream:
+
+        if not isinstance(file, str):
+            stream = BytesIO(file)
+        elif 'm3u8' in protocol:
+            stream = (
+                ffmpeg.input(file).output('pipe:',
+                                          format='mp4',
+                                          vcodec='copy',
+                                          acodec='copy',
+                                          movflags='frag_keyframe+empty_moov',
+                                          **{'bsf:a': 'aac_adtstoasc'}).run_async(pipe_stdout=True)
+            )
+        elif 'stream' not in dir():
+            stream = req.urlopen(file)
+
+
+        for part_index in range(part_count):
+            # Read the file by in chunks of size part_size
+            # part = out_proc.stdout.read(part_size)
+            if hasattr(stream, 'read'):
                 part = stream.read(part_size)
+            elif hasattr(stream, 'stdout'):
+                part = stream.stdout.read(part_size)
+            else:
+                raise Exception("Failed read from stream, there aren't read or stdout attribute")
+            # part = stream.read(part_size)
+            if part == b'':
+                part_count = part_index
+                break
+            if len(part) != part_size:
+                print("Len mismatch")
+                dat = b'0' * (part_size - len(part))
+                part += dat
+                if not is_large:
+                    hash_md5 = hashlib.md5()
+                    hash_md5.update(file + dat)
+            # The SavePartRequest is different depending on whether
+            # the file is too large or not (over or less than 10MB)
+            if is_large:
+                request = functions.upload.SaveBigFilePartRequest(
+                    file_id, part_index, part_count, part)
+            else:
+                request = functions.upload.SaveFilePartRequest(
+                    file_id, part_index, part)
 
-                # The SavePartRequest is different depending on whether
-                # the file is too large or not (over or less than 10MB)
-                if is_large:
-                    request = functions.upload.SaveBigFilePartRequest(
-                        file_id, part_index, part_count, part)
-                else:
-                    request = functions.upload.SaveFilePartRequest(
-                        file_id, part_index, part)
-
-                result = await self(request)
-                if result:
-                    self._log[__name__].debug('Uploaded %d/%d',
-                                              part_index + 1, part_count)
-                    if progress_callback:
-                        r = progress_callback(stream.tell(), file_size)
-                        if inspect.isawaitable(r):
-                            await r
-                else:
-                    raise RuntimeError(
-                        'Failed to upload file part {}.'.format(part_index))
+            result = await self(request)
+            if result:
+                self._log[__name__].debug('Uploaded %d/%d',
+                                          part_index + 1, part_count)
+                if progress_callback:
+                    r = progress_callback(stream.tell(), file_size)
+                    if inspect.isawaitable(r):
+                        await r
+            else:
+                raise RuntimeError(
+                    'Failed to upload file part {}.'.format(part_index))
 
         if is_large:
             return types.InputFileBig(file_id, part_count, file_name)
