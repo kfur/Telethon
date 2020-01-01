@@ -8,7 +8,6 @@ import typing
 import inspect
 from io import BytesIO
 from urllib import request as req
-import ffmpeg
 
 from .. import utils, helpers, hints
 from ..tl import types, functions, custom
@@ -424,7 +423,7 @@ class UploadMethods:
             part_size_kb: float = None,
             file_name: str = None,
             use_cache: type = None,
-            progress_callback: 'hints.ProgressCallback' = None, protocol='https', file_size=None) -> 'types.TypeInputFile':
+            progress_callback: 'hints.ProgressCallback' = None, file_size=None) -> 'types.TypeInputFile':
         """
         Uploads a file to Telegram's servers, without sending it.
 
@@ -530,16 +529,8 @@ class UploadMethods:
             #     with open(file, 'rb') as stream:
             #         file = stream.read()
 
-            if 'm3u8' in protocol:
-                out_proc = (
-                    ffmpeg.input(file).output('pipe:',
-                                              format='mp4',
-                                              vcodec='copy',
-                                              acodec='copy',
-                                              movflags='frag_keyframe+empty_moov',
-                                              **{'bsf:a': 'aac_adtstoasc'}).run_async(pipe_stdout=True)
-                )
-                file = out_proc.stdout.read()
+            if isinstance(file, typing.BinaryIO):
+                file = file.read()
             else:
                 with req.urlopen(file) as resp:
                     file = resp.read()
@@ -551,38 +542,27 @@ class UploadMethods:
 
         # with open(file, 'rb') if isinstance(file, str) else BytesIO(file)\
         #         as stream:
-
-        if not isinstance(file, str):
+        if isinstance(file, typing.BinaryIO):
+            stream = file
+        elif not isinstance(file, str):
             stream = BytesIO(file)
-        elif 'm3u8' in protocol:
-            stream = (
-                ffmpeg.input(file).output('pipe:',
-                                          format='mp4',
-                                          vcodec='copy',
-                                          acodec='copy',
-                                          movflags='frag_keyframe+empty_moov',
-                                          **{'bsf:a': 'aac_adtstoasc'}).run_async(pipe_stdout=True)
-            )
         elif 'stream' not in dir():
             stream = req.urlopen(file)
-
 
         for part_index in range(part_count):
             # Read the file by in chunks of size part_size
             # part = out_proc.stdout.read(part_size)
             if hasattr(stream, 'read'):
                 part = stream.read(part_size)
-            elif hasattr(stream, 'stdout'):
-                part = stream.stdout.read(part_size)
             else:
-                raise Exception("Failed read from stream, there aren't read or stdout attribute")
+                raise Exception("Failed read from stream, there aren't read attribute")
             # part = stream.read(part_size)
             if part == b'':
                 part_count = part_index
                 break
             if len(part) != part_size:
                 print("Len mismatch")
-                dat = b'0' * (part_size - len(part))
+                dat = b'\0' * (part_size - len(part))
                 part += dat
                 if not is_large:
                     hash_md5 = hashlib.md5()
