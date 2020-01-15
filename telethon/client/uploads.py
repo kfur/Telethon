@@ -25,6 +25,7 @@ if typing.TYPE_CHECKING:
 
 class _CacheType:
     """Like functools.partial but pretends to be the wrapped class."""
+
     def __init__(self, cls):
         self._cls = cls
 
@@ -328,7 +329,7 @@ class UploadMethods:
         file_handle, media, image = await self._file_to_media(
             file, force_document=force_document,
             progress_callback=progress_callback,
-            attributes=attributes,  allow_cache=allow_cache, thumb=thumb,
+            attributes=attributes, allow_cache=allow_cache, thumb=thumb,
             voice_note=voice_note, video_note=video_note,
             supports_streaming=supports_streaming
         )
@@ -423,7 +424,7 @@ class UploadMethods:
             part_size_kb: float = None,
             file_name: str = None,
             use_cache: type = None,
-            progress_callback: 'hints.ProgressCallback' = None, file_size=None) -> 'types.TypeInputFile':
+            progress_callback: 'hints.ProgressCallback' = None, file_size=None, user_agent=None) -> 'types.TypeInputFile':
         """
         Uploads a file to Telegram's servers, without sending it.
 
@@ -532,7 +533,11 @@ class UploadMethods:
             if isinstance(file, typing.BinaryIO):
                 file = file.read()
             else:
-                with req.urlopen(file) as resp:
+                headers = None
+                if user_agent != None:
+                    headers = {'User-Agent': user_agent}
+                get_req = req.Request(file, method='GET', headers=headers)
+                with req.urlopen(get_req) as resp:
                     file = resp.read()
             hash_md5.update(file)
 
@@ -547,7 +552,11 @@ class UploadMethods:
         elif not isinstance(file, str):
             stream = BytesIO(file)
         elif 'stream' not in dir():
-            stream = req.urlopen(file)
+            headers = None
+            if user_agent != None:
+                headers = {'User-Agent': user_agent}
+            get_req = req.Request(file, method='GET', headers=headers)
+            stream = req.urlopen(get_req)
 
         for part_index in range(part_count):
             # Read the file by in chunks of size part_size
@@ -555,7 +564,8 @@ class UploadMethods:
             if hasattr(stream, 'read'):
                 part = stream.read(part_size)
             else:
-                raise Exception("Failed read from stream, there aren't read attribute")
+                raise Exception(
+                    "Failed read from stream, there aren't read attribute")
             # part = stream.read(part_size)
             if part == b'':
                 part_count = part_index
