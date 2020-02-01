@@ -424,7 +424,7 @@ class UploadMethods:
             part_size_kb: float = None,
             file_name: str = None,
             use_cache: type = None,
-            progress_callback: 'hints.ProgressCallback' = None, file_size=None, user_agent=None) -> 'types.TypeInputFile':
+            progress_callback: 'hints.ProgressCallback' = None, file_size=None, http_headers=None) -> 'types.TypeInputFile':
         """
         Uploads a file to Telegram's servers, without sending it.
 
@@ -533,10 +533,7 @@ class UploadMethods:
             if isinstance(file, typing.BinaryIO):
                 file = file.read()
             else:
-                headers = None
-                if user_agent != None:
-                    headers = {'User-Agent': user_agent}
-                get_req = req.Request(file, method='GET', headers=headers)
+                get_req = req.Request(file, method='GET', headers=http_headers)
                 with req.urlopen(get_req) as resp:
                     file = resp.read()
             hash_md5.update(file)
@@ -552,10 +549,7 @@ class UploadMethods:
         elif not isinstance(file, str):
             stream = BytesIO(file)
         elif 'stream' not in dir():
-            headers = None
-            if user_agent != None:
-                headers = {'User-Agent': user_agent}
-            get_req = req.Request(file, method='GET', headers=headers)
+            get_req = req.Request(file, method='GET', headers=http_headers)
             stream = req.urlopen(get_req)
 
         for part_index in range(part_count):
