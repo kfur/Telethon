@@ -422,7 +422,7 @@ class UploadMethods:
             part_size_kb: float = None,
             file_name: str = None,
             use_cache: type = None,
-            progress_callback: 'hints.ProgressCallback' = None) -> 'types.TypeInputFile':
+            progress_callback: 'hints.ProgressCallback' = None, file_size) -> 'types.TypeInputFile':
         """
         Uploads a file to Telegram's servers, without sending it.
 
@@ -483,27 +483,6 @@ class UploadMethods:
         if isinstance(file, (types.InputFile, types.InputFileBig)):
             return file  # Already uploaded
 
-        if not file_name and getattr(file, 'name', None):
-            file_name = file.name
-
-        if isinstance(file, str):
-            file_size = os.path.getsize(file)
-        elif isinstance(file, bytes):
-            file_size = len(file)
-        else:
-            if isinstance(file, io.IOBase) and file.seekable():
-                pos = file.tell()
-            else:
-                pos = None
-
-            # TODO Don't load the entire file in memory always
-            data = file.read()
-            if pos is not None:
-                file.seek(pos)
-
-            file = data
-            file_size = len(file)
-
         # File will now either be a string or bytes
         if not part_size_kb:
             part_size_kb = utils.get_appropriated_part_size(file_size)
@@ -542,38 +521,67 @@ class UploadMethods:
             if isinstance(file, str):
                 with open(file, 'rb') as stream:
                     file = stream.read()
+            elif isinstance(file, typing.BinaryIO):
+                file = await file.read(file_size)
+            else:
+                raise Exception('bad file type: {}'.format(type(file)))
             hash_md5.update(file)
 
         part_count = (file_size + part_size - 1) // part_size
         self._log[__name__].info('Uploading file of %d bytes in %d chunks of %d',
                                  file_size, part_count, part_size)
 
-        with open(file, 'rb') if isinstance(file, str) else BytesIO(file)\
-                as stream:
-            for part_index in range(part_count):
-                # Read the file by in chunks of size part_size
-                part = stream.read(part_size)
 
-                # The SavePartRequest is different depending on whether
-                # the file is too large or not (over or less than 10MB)
-                if is_large:
-                    request = functions.upload.SaveBigFilePartRequest(
-                        file_id, part_index, part_count, part)
-                else:
-                    request = functions.upload.SaveFilePartRequest(
-                        file_id, part_index, part)
+        if issubclass(type(file), typing.BinaryIO):
+            stream = file
+        elif not isinstance(file, str):
+            stream = BytesIO(file)
+        else:
+            raise Exception('bad stream: {}'.format(stream))
 
-                result = await self(request)
-                if result:
-                    self._log[__name__].debug('Uploaded %d/%d',
-                                              part_index + 1, part_count)
-                    if progress_callback:
-                        r = progress_callback(stream.tell(), file_size)
-                        if inspect.isawaitable(r):
-                            await r
+        for part_index in range(part_count):
+            # Read the file by in chunks of size part_size
+            # part = out_proc.stdout.read(part_size)
+            if hasattr(stream, 'read'):
+                if issubclass(type(stream), typing.BinaryIO):
+                    part = await stream.read(part_size)
                 else:
-                    raise RuntimeError(
-                        'Failed to upload file part {}.'.format(part_index))
+                    part = stream.read(part_size)
+            elif hasattr(stream, 'stdout'):
+                part = stream.stdout.read(part_size)
+            else:
+                raise Exception("Failed read from stream, there aren't read or stdout attribute")
+            # part = stream.read(part_size)
+            if part == b'':
+                part_count = part_index
+                break
+            #if len(part) != part_size:
+            #    print("Len mismatch: want part len = ", part_size, " real =", len(part))
+            #    dat = b'\0' * (part_size - len(part))
+            #    part += dat
+            #    if not is_large:
+            #        hash_md5 = hashlib.md5()
+            #        hash_md5.update(file + dat)
+            # The SavePartRequest is different depending on whether
+            # the file is too large or not (over or less than 10MB)
+            if is_large:
+                request = functions.upload.SaveBigFilePartRequest(
+                    file_id, part_index, part_count, part)
+            else:
+                request = functions.upload.SaveFilePartRequest(
+                    file_id, part_index, part)
+
+            result = await self(request)
+            if result:
+                self._log[__name__].debug('Uploaded %d/%d',
+                                          part_index + 1, part_count)
+                if progress_callback:
+                    r = progress_callback(stream.tell(), file_size)
+                    if inspect.isawaitable(r):
+                        await r
+            else:
+                raise RuntimeError(
+                    'Failed to upload file part {}.'.format(part_index))
 
         if is_large:
             return types.InputFileBig(file_id, part_count, file_name)
