@@ -555,8 +555,12 @@ class UploadMethods:
         for part_index in range(part_count):
             # Read the file by in chunks of size part_size
             # part = out_proc.stdout.read(part_size)
+            part = None
             if hasattr(stream, 'read'):
-                part = stream.read(part_size)
+                if inspect.iscoroutinefunction(stream.read):
+                    part = await stream.read(part_size)
+                else:
+                    part = stream.read(part_size)
             else:
                 raise Exception(
                     "Failed read from stream, there aren't read attribute")
