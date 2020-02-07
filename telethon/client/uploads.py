@@ -95,6 +95,7 @@ class UploadMethods:
             *,
             caption: typing.Union[str, typing.Sequence[str]] = None,
             force_document: bool = False,
+            clear_draft: bool = False,
             progress_callback: 'hints.ProgressCallback' = None,
             reply_to: 'hints.MessageIDLike' = None,
             attributes: 'typing.Sequence[types.TypeDocumentAttribute]' = None,
@@ -169,6 +170,9 @@ class UploadMethods:
                 If left to `False` and the file is a path that ends with
                 the extension of an image file or a video file, it will be
                 sent as such. Otherwise always as a document.
+
+            clear_draft (`bool`, optional):
+                Whether the existing draft should be cleared or not.
 
             progress_callback (`callable`, optional):
                 A callback function accepting two parameters:
@@ -271,7 +275,7 @@ class UploadMethods:
         # First check if the user passed an iterable, in which case
         # we may want to send as an album if all are photo files.
         if utils.is_list_like(file):
-            image_captions = []
+            media_captions = []
             document_captions = []
             if utils.is_list_like(caption):
                 captions = caption
@@ -279,28 +283,29 @@ class UploadMethods:
                 captions = [caption]
 
             # TODO Fix progress_callback
-            images = []
+            media = []
             if force_document:
                 documents = file
             else:
                 documents = []
                 for doc, cap in itertools.zip_longest(file, captions):
-                    if utils.is_image(doc):
-                        images.append(doc)
-                        image_captions.append(cap)
+                    if utils.is_image(doc) or utils.is_video(doc):
+                        media.append(doc)
+                        media_captions.append(cap)
                     else:
                         documents.append(doc)
                         document_captions.append(cap)
 
             result = []
-            while images:
+            while media:
                 result += await self._send_album(
-                    entity, images[:10], caption=image_captions[:10],
+                    entity, media[:10], caption=media_captions[:10],
                     progress_callback=progress_callback, reply_to=reply_to,
-                    parse_mode=parse_mode, silent=silent, schedule=schedule
+                    parse_mode=parse_mode, silent=silent, schedule=schedule,
+                    supports_streaming=supports_streaming, clear_draft=clear_draft
                 )
-                images = images[10:]
-                image_captions = image_captions[10:]
+                media = media[10:]
+                media_captions = media_captions[10:]
 
             for doc, cap in zip(documents, captions):
                 result.append(await self.send_file(
@@ -310,6 +315,7 @@ class UploadMethods:
                     attributes=attributes, thumb=thumb, voice_note=voice_note,
                     video_note=video_note, buttons=buttons, silent=silent,
                     supports_streaming=supports_streaming, schedule=schedule,
+                    clear_draft=clear_draft,
                     **kwargs
                 ))
 
@@ -342,7 +348,7 @@ class UploadMethods:
         request = functions.messages.SendMediaRequest(
             entity, media, reply_to_msg_id=reply_to, message=caption,
             entities=msg_entities, reply_markup=markup, silent=silent,
-            schedule_date=schedule
+            schedule_date=schedule, clear_draft=clear_draft
         )
         msg = self._get_response_message(request, await self(request), entity)
         await self._cache_media(msg, file, file_handle, image=image)
@@ -351,7 +357,8 @@ class UploadMethods:
 
     async def _send_album(self: 'TelegramClient', entity, files, caption='',
                           progress_callback=None, reply_to=None,
-                          parse_mode=(), silent=None, schedule=None):
+                          parse_mode=(), silent=None, schedule=None,
+                          supports_streaming=None, clear_draft=None):
         """Specialized version of .send_file for albums"""
         # We don't care if the user wants to avoid cache, we will use it
         # anyway. Why? The cached version will be exactly the same thing
@@ -379,7 +386,8 @@ class UploadMethods:
             # :tl:`InputMediaUploadedPhoto`. However using that will
             # make it `raise MediaInvalidError`, so we need to upload
             # it as media and then convert that to :tl:`InputMediaPhoto`.
-            fh, fm, _ = await self._file_to_media(file)
+            fh, fm, _ = await self._file_to_media(
+                file, supports_streaming=supports_streaming)
             if isinstance(fm, types.InputMediaUploadedPhoto):
                 r = await self(functions.messages.UploadMediaRequest(
                     entity, media=fm
@@ -388,6 +396,15 @@ class UploadMethods:
                     fh.md5, fh.size, utils.get_input_photo(r.photo))
 
                 fm = utils.get_input_media(r.photo)
+            elif isinstance(fm, types.InputMediaUploadedDocument):
+                r = await self(functions.messages.UploadMediaRequest(
+                    entity, media=fm
+                ))
+                self.session.cache_file(
+                    fh.md5, fh.size, utils.get_input_document(r.document))
+
+                fm = utils.get_input_media(
+                    r.document, supports_streaming=supports_streaming)
 
             if captions:
                 caption, msg_entities = captions.pop()
@@ -397,25 +414,18 @@ class UploadMethods:
                 fm,
                 message=caption,
                 entities=msg_entities
+                # random_id is autogenerated
             ))
 
         # Now we can construct the multi-media request
-        result = await self(functions.messages.SendMultiMediaRequest(
+        request = functions.messages.SendMultiMediaRequest(
             entity, reply_to_msg_id=reply_to, multi_media=media,
-            silent=silent, schedule_date=schedule
-        ))
+            silent=silent, schedule_date=schedule, clear_draft=clear_draft
+        )
+        result = await self(request)
 
-        # We never sent a `random_id` for the messages that resulted from
-        # the request so we can't pair them up with the `Updates` that we
-        # get from Telegram. However, the sent messages have a photo and
-        # the photo IDs match with those we did send.
-        #
-        # Updates -> {_: message}
-        messages = self._get_response_message(None, result, entity)
-        # {_: message} -> {photo ID: message}
-        messages = {m.photo.id: m for m in messages.values()}
-        # Sent photo IDs -> messages
-        return [messages[m.media.id.id] for m in media]
+        random_ids = [m.random_id for m in media]
+        return self._get_response_message(random_ids, result, entity)
 
     async def upload_file(
             self: 'TelegramClient',
@@ -490,6 +500,35 @@ class UploadMethods:
         if file_size is None:
             stream = req.urlopen(file)
             file_size = int(stream.headers['Content-Length'])
+
+        # if isinstance(file, str):
+        #     file_size = os.path.getsize(file)
+        # elif isinstance(file, bytes):
+        #     file_size = len(file)
+        # else:
+        #     # `aiofiles` shouldn't base `IOBase` because they change the
+        #     # methods' definition. `seekable` would be `async` but since
+        #     # we won't get to check that, there's no need to maybe-await.
+        #     if isinstance(file, io.IOBase) and file.seekable():
+        #         pos = file.tell()
+        #     else:
+        #         pos = None
+
+        #     # TODO Don't load the entire file in memory always
+        #     data = file.read()
+        #     if inspect.isawaitable(data):
+        #         data = await data
+
+        #     if pos is not None:
+        #         file.seek(pos)
+
+        #     if not isinstance(data, bytes):
+        #         raise TypeError(
+        #             'file descriptor returned {}, not bytes (you must '
+        #             'open the file in bytes mode)'.format(type(data)))
+
+        #     file = data
+        #     file_size = len(file)
 
         # File will now either be a string or bytes
         if not part_size_kb:
@@ -619,7 +658,9 @@ class UploadMethods:
         if as_image is None:
             as_image = utils.is_image(file) and not force_document
 
-        if not isinstance(file, (str, bytes, io.IOBase)):
+        # `aiofiles` do not base `io.IOBase` but do have `read`, so we
+        # just check for the read attribute to see if it's file-like.
+        if not isinstance(file, (str, bytes)) and not hasattr(file, 'read'):
             # The user may pass a Message containing media (or the media,
             # or anything similar) that should be treated as a file. Try
             # getting the input media for whatever they passed and send it.

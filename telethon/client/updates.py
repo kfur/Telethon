@@ -335,6 +335,12 @@ class UpdateMethods:
             except Exception:
                 continue  # Any disconnected exception should be ignored
 
+            # Don't bother sending pings until the low-level connection is
+            # ready, otherwise a lot of pings will be batched to be sent upon
+            # reconnect, when we really don't care about that.
+            if not self._sender._transport_connected():
+                continue
+
             # We also don't really care about their result.
             # Just send them periodically.
             try:
@@ -496,6 +502,14 @@ class UpdateMethods:
 
     async def _handle_auto_reconnect(self: 'TelegramClient'):
         # TODO Catch-up
+        # For now we make a high-level request to let Telegram
+        # know we are still interested in receiving more updates.
+        try:
+            await self.get_me()
+        except Exception as e:
+            self._log[__name__].warning('Error executing high-level request '
+                                        'after reconnect: %s: %s', type(e), e)
+
         return
         try:
             self._log[__name__].info(

@@ -1,8 +1,12 @@
 import abc
 import asyncio
 import socket
-import ssl as ssl_mod
 import sys
+
+try:
+    import ssl as ssl_mod
+except ImportError:
+    ssl_mod = None
 
 from ...errors import InvalidChecksumError
 from ... import helpers
@@ -68,6 +72,12 @@ class Connection(abc.ABC):
                 loop=self._loop
             )
             if ssl:
+                if ssl_mod is None:
+                    raise RuntimeError(
+                        'Cannot use proxy that requires SSL'
+                        'without the SSL module being available'
+                    )
+
                 s.settimeout(timeout)
                 s = ssl_mod.wrap_socket(
                     s,
@@ -113,9 +123,11 @@ class Connection(abc.ABC):
                 try:
                     await self._writer.wait_closed()
                 except Exception as e:
-                    # Seen OSError: No route to host and [Errno 32] Broken pipe
-                    # Disconnecting should never raise
-                    self._log.warning('Unhandled %s on disconnect: %s', type(e), e)
+                    # Disconnecting should never raise. Seen:
+                    # * OSError: No route to host and
+                    # * OSError: [Errno 32] Broken pipe
+                    # * ConnectionResetError
+                    self._log.info('%s during disconnect: %s', type(e), e)
 
     def send(self, data):
         """
@@ -244,7 +256,7 @@ class PacketCodec(abc.ABC):
 
     """
     This attribute should be re-defined by subclass to define if some
-    "magic bytes" should be sent to server right after conection is made to
+    "magic bytes" should be sent to server right after connection is made to
     signal which protocol will be used
     """
     tag = None

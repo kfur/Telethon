@@ -3,6 +3,7 @@ import asyncio
 import collections
 import logging
 import platform
+import sys
 import time
 import typing
 
@@ -16,7 +17,7 @@ from ..statecache import StateCache
 from ..tl import TLObject, functions, types
 from ..tl.alltlobjects import LAYER
 
-DEFAULT_DC_ID = 4
+DEFAULT_DC_ID = 2
 DEFAULT_IPV4_IP = '149.154.167.51'
 DEFAULT_IPV6_IP = '[2001:67c:4e8:f002::a]'
 DEFAULT_PORT = 443
@@ -251,6 +252,24 @@ class TelegramBaseClient(abc.ABC):
         self.api_id = int(api_id)
         self.api_hash = api_hash
 
+        # Current proxy implementation requires `sock_connect`, and some
+        # event loops lack this method. If the current loop is missing it,
+        # bail out early and suggest an alternative.
+        #
+        # TODO A better fix is obviously avoiding the use of `sock_connect`
+        #
+        # See https://github.com/LonamiWebs/Telethon/issues/1337 for details.
+        if not callable(getattr(self._loop, 'sock_connect', None)):
+            raise TypeError(
+                'Event loop of type {} lacks `sock_connect`, which is needed to use proxies.\n\n'
+                'Change the event loop in use to use proxies:\n'
+                '# https://github.com/LonamiWebs/Telethon/issues/1337\n'
+                'import asyncio\n'
+                'asyncio.set_event_loop(asyncio.SelectorEventLoop())'.format(
+                    self._loop.__class__.__name__
+                )
+            )
+
         self._request_retries = request_retries
         self._connection_retries = connection_retries
         self._retry_delay = retry_delay or 0
@@ -381,6 +400,15 @@ class TelegramBaseClient(abc.ABC):
                     print('Error on disconnect')
         """
         return self._sender.disconnected
+
+    @property
+    def flood_sleep_threshold(self):
+        return self._flood_sleep_threshold
+
+    @flood_sleep_threshold.setter
+    def flood_sleep_threshold(self, value):
+        # None -> 0, negative values don't really matter
+        self._flood_sleep_threshold = min(value or 0, 24 * 60 * 60)
 
     # endregion
 
@@ -634,7 +662,7 @@ class TelegramBaseClient(abc.ABC):
             self._exported_sessions[cdn_redirect.dc_id] = session
 
         self._log[__name__].info('Creating new CDN client')
-        client = TelegramBareClient(
+        client = TelegramBaseClient(
             session, self.api_id, self.api_hash,
             proxy=self._sender.connection.conn.proxy,
             timeout=self._sender.connection.get_timeout()

@@ -257,7 +257,8 @@ class DownloadMethods:
             # See issue #500, Android app fails as of v4.6.0 (1155).
             # The fix seems to be using the full channel chat photo.
             ie = await self.get_input_entity(entity)
-            if isinstance(ie, types.InputPeerChannel):
+            ty = helpers._entity_type(ie)
+            if ty == helpers._EntityType.CHANNEL:
                 full = await self(functions.channels.GetFullChannelRequest(ie))
                 return await self._download_photo(
                     full.full_chat.chat_photo, file,
@@ -433,7 +434,10 @@ class DownloadMethods:
         try:
             async for chunk in self.iter_download(
                     input_location, request_size=part_size, dc_id=dc_id):
-                f.write(chunk)
+                r = f.write(chunk)
+                if inspect.isawaitable(r):
+                    await r
+
                 if progress_callback:
                     r = progress_callback(f.tell(), file_size)
                     if inspect.isawaitable(r):
@@ -551,6 +555,15 @@ class DownloadMethods:
                     await stream.close()
                     assert len(header) == 32
         """
+        info = utils._get_file_info(file)
+        if info.dc_id is not None:
+            dc_id = info.dc_id
+
+        if file_size is None:
+            file_size = info.size
+
+        file = info.location
+
         if chunk_size is None:
             chunk_size = request_size
 
@@ -567,11 +580,6 @@ class DownloadMethods:
             request_size = MIN_CHUNK_SIZE
         elif request_size > MAX_CHUNK_SIZE:
             request_size = MAX_CHUNK_SIZE
-
-        old_dc = dc_id
-        dc_id, file = utils.get_input_location(file)
-        if dc_id is None:
-            dc_id = old_dc
 
         if chunk_size == request_size \
                 and offset % MIN_CHUNK_SIZE == 0 \

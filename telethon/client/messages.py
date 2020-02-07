@@ -2,7 +2,7 @@ import inspect
 import itertools
 import typing
 
-from .. import utils, errors, hints
+from .. import helpers, utils, errors, hints
 from ..requestiter import RequestIter
 from ..tl import types, functions
 
@@ -57,14 +57,21 @@ class _MessagesIter(RequestIter):
 
         if from_user:
             from_user = await self.client.get_input_entity(from_user)
-            if not isinstance(from_user, (
-                    types.InputPeerUser, types.InputPeerSelf)):
+            ty = helpers._entity_type(from_user)
+            if ty != helpers._EntityType.USER:
                 from_user = None  # Ignore from_user unless it's a user
 
         if from_user:
             self.from_id = await self.client.get_peer_id(from_user)
         else:
             self.from_id = None
+
+        # `messages.searchGlobal` only works with text `search` queries.
+        # If we want to perform global a search with `from_user` or `filter`,
+        # we have to perform a normal `messages.search`, *but* we can make the
+        # entity be `inputPeerEmpty`.
+        if not self.entity and (filter or from_user):
+            self.entity = types.InputPeerEmpty()
 
         if not self.entity:
             self.request = functions.messages.SearchGlobalRequest(
@@ -79,8 +86,8 @@ class _MessagesIter(RequestIter):
                 filter = types.InputMessagesFilterEmpty()
 
             # Telegram completely ignores `from_id` in private chats
-            if isinstance(
-                    self.entity, (types.InputPeerUser, types.InputPeerSelf)):
+            ty = helpers._entity_type(self.entity)
+            if ty == helpers._EntityType.USER:
                 # Don't bother sending `from_user` (it's ignored anyway),
                 # but keep `from_id` defined above to check it locally.
                 from_user = None
@@ -239,6 +246,7 @@ class _IDsIter(RequestIter):
         self._ids = list(reversed(ids)) if self.reverse else ids
         self._offset = 0
         self._entity = (await self.client.get_input_entity(entity)) if entity else None
+        self._ty = helpers._entity_type(self._entity) if self._entity else None
 
         # 30s flood wait every 300 messages (3 requests of 100 each, 30 of 10, etc.)
         if self.wait_time is None:
@@ -252,7 +260,7 @@ class _IDsIter(RequestIter):
         self._offset += _MAX_CHUNK_SIZE
 
         from_id = None  # By default, no need to validate from_id
-        if isinstance(self._entity, (types.InputChannel, types.InputPeerChannel)):
+        if self._ty == helpers._EntityType.CHANNEL:
             try:
                 r = await self.client(
                     functions.channels.GetMessagesRequest(self._entity, ids))
@@ -336,7 +344,8 @@ class MessageMethods:
                 is the case.
 
                 Note that if you want to perform a global search,
-                you **must** set a non-empty `search` string.
+                you **must** set a non-empty `search` string, a `filter`.
+                or `from_user`.
 
             limit (`int` | `None`, optional):
                 Number of messages to be retrieved. Due to limitations with
@@ -501,7 +510,7 @@ class MessageMethods:
                 photos = await client.get_messages(chat, None, filter=InputMessagesFilterPhotos)
 
                 # Get messages by ID:
-                message_1337 = await client.get_messages(chats, ids=1337)
+                message_1337 = await client.get_messages(chat, ids=1337)
         """
         if len(args) == 1 and 'limit' not in kwargs:
             if 'min_id' in kwargs and 'max_id' in kwargs:
@@ -593,7 +602,6 @@ class MessageMethods:
 
             clear_draft (`bool`, optional):
                 Whether the existing draft should be cleared or not.
-                Has no effect when sending a file.
 
             buttons (`list`, `custom.Button <telethon.tl.custom.button.Button>`, :tl:`KeyboardButton`):
                 The matrix (list of lists), row list or button to be shown
@@ -682,7 +690,8 @@ class MessageMethods:
             return await self.send_file(
                 entity, file, caption=message, reply_to=reply_to,
                 parse_mode=parse_mode, force_document=force_document,
-                buttons=buttons
+                buttons=buttons, clear_draft=clear_draft, silent=silent,
+                schedule=schedule
             )
 
         entity = await self.get_input_entity(entity)
@@ -914,6 +923,7 @@ class MessageMethods:
             parse_mode: str = (),
             link_preview: bool = True,
             file: 'hints.FileLike' = None,
+            force_document: bool = False,
             buttons: 'hints.MarkupLike' = None,
             schedule: 'hints.DateLike' = None
     ) -> 'types.Message':
@@ -956,6 +966,9 @@ class MessageMethods:
             file (`str` | `bytes` | `file` | `media`, optional):
                 The file object that should replace the existing media
                 in the message.
+
+            force_document (`bool`, optional):
+                Whether to send the given file as a document or not.
 
             buttons (`list`, `custom.Button <telethon.tl.custom.button.Button>`, :tl:`KeyboardButton`):
                 The matrix (list of lists), row list or button to be shown
@@ -1008,7 +1021,8 @@ class MessageMethods:
             entity = entity.to_id
 
         text, msg_entities = await self._parse_message_text(text, parse_mode)
-        file_handle, media, image = await self._file_to_media(file)
+        file_handle, media, image = await self._file_to_media(file,
+                force_document=force_document)
 
         if isinstance(entity, types.InputBotInlineMessageID):
             return await self(functions.messages.EditInlineBotMessageRequest(
@@ -1095,7 +1109,7 @@ class MessageMethods:
         )
 
         entity = await self.get_input_entity(entity) if entity else None
-        if isinstance(entity, types.InputPeerChannel):
+        if helpers._entity_type(entity) == helpers._EntityType.CHANNEL:
             return await self([functions.channels.DeleteMessagesRequest(
                          entity, list(c)) for c in utils.chunks(message_ids)])
         else:
@@ -1168,7 +1182,7 @@ class MessageMethods:
                 return True
 
         if max_id is not None:
-            if isinstance(entity, types.InputPeerChannel):
+            if helpers._entity_type(entity) == helpers._EntityType.CHANNEL:
                 return await self(functions.channels.ReadHistoryRequest(
                     utils.get_input_channel(entity), max_id=max_id))
             else:
@@ -1210,9 +1224,7 @@ class MessageMethods:
                 message = await client.send_message(chat, 'Pinotifying is fun!')
                 await client.pin_message(chat, message, notify=True)
         """
-        if not message:
-            message = 0
-
+        message = utils.get_message_id(message) or 0
         entity = await self.get_input_entity(entity)
         await self(functions.messages.UpdatePinnedMessageRequest(
             peer=entity,

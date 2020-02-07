@@ -6,7 +6,17 @@ from ..tl import types, functions
 @name_inner_event
 class ChatAction(EventBuilder):
     """
-    Occurs whenever a user joins or leaves a chat, or a message is pinned.
+    Occurs on certain chat actions:
+
+    * Whenever a new chat is created.
+    * Whenever a chat's title or photo is changed or removed.
+    * Whenever a new message is pinned.
+    * Whenever a user joins or is added to the group.
+    * Whenever a user is removed or leaves a group if it has
+      less than 50 members or the removed user was a bot.
+
+    Note that "chat" refers to "small group, megagroup and broadcast
+    channel", whereas "group" refers to "small group and megagroup" only.
     """
     @classmethod
     def build(cls, update, others=None, self_id=None):
@@ -26,6 +36,21 @@ class ChatAction(EventBuilder):
             return cls.Event(types.PeerChat(update.chat_id),
                              kicked_by=True,
                              users=update.user_id)
+
+        elif isinstance(update, types.UpdateChannel):
+            # We rely on the fact that update._entities is set by _process_update
+            # This update only has the channel ID, and Telegram *should* have sent
+            # the entity in the Updates.chats list. If it did, check Channel.left
+            # to determine what happened.
+            peer = types.PeerChannel(update.channel_id)
+            channel = update._entities.get(utils.get_peer_id(peer))
+            if channel is not None:
+                if isinstance(channel, types.ChannelForbidden) or channel.left:
+                    return cls.Event(peer,
+                                     kicked_by=True)
+                else:
+                    return cls.Event(peer,
+                                     added_by=True)
 
         elif (isinstance(update, (
                 types.UpdateNewMessage, types.UpdateNewChannelMessage))
@@ -143,14 +168,21 @@ class ChatAction(EventBuilder):
 
             # If `from_id` was not present (it's `True`) or the affected
             # user was "kicked by itself", then it left. Else it was kicked.
-            if kicked_by is True or kicked_by == users:
+            if kicked_by is True or (users is not None and kicked_by == users):
                 self.user_left = True
             elif kicked_by:
                 self.user_kicked = True
                 self._kicked_by = kicked_by
 
             self.created = bool(created)
-            self._user_peers = users if isinstance(users, list) else [users]
+
+            if isinstance(users, list):
+                self._user_ids = users
+            elif users:
+                self._user_ids = [users]
+            else:
+                self._user_ids = []
+
             self._users = None
             self._input_users = None
             self.new_title = new_title
@@ -308,8 +340,8 @@ class ChatAction(EventBuilder):
             """
             Returns the marked signed ID of the first user, if any.
             """
-            if self._user_peers:
-                return utils.get_peer_id(self._user_peers[0])
+            if self._user_ids:
+                return self._user_ids[0]
 
         @property
         def users(self):
@@ -319,14 +351,14 @@ class ChatAction(EventBuilder):
             Might be empty if the information can't be retrieved or there
             are no users taking part.
             """
-            if not self._user_peers:
+            if not self._user_ids:
                 return []
 
             if self._users is None:
                 self._users = [
-                    self._entities[utils.get_peer_id(peer)]
-                    for peer in self._user_peers
-                    if utils.get_peer_id(peer) in self._entities
+                    self._entities[user_id]
+                    for user_id in self._user_ids
+                    if user_id in self._entities
                 ]
 
             return self._users
@@ -335,10 +367,10 @@ class ChatAction(EventBuilder):
             """
             Returns `users` but will make an API call if necessary.
             """
-            if not self._user_peers:
+            if not self._user_ids:
                 return []
 
-            if self._users is None or len(self._users) != len(self._user_peers):
+            if self._users is None or len(self._users) != len(self._user_ids):
                 await self.action_message._reload_message()
                 self._users = [
                     u for u in self.action_message.action_entities
@@ -351,11 +383,11 @@ class ChatAction(EventBuilder):
             """
             Input version of the ``self.users`` property.
             """
-            if self._input_users is None and self._user_peers:
+            if self._input_users is None and self._user_ids:
                 self._input_users = []
-                for peer in self._user_peers:
+                for user_id in self._user_ids:
                     try:
-                        self._input_users.append(self._client._entity_cache[peer])
+                        self._input_users.append(self._client._entity_cache[user_id])
                     except KeyError:
                         pass
             return self._input_users or []
@@ -379,5 +411,5 @@ class ChatAction(EventBuilder):
             """
             Returns the marked signed ID of the users, if any.
             """
-            if self._user_peers:
-                return [utils.get_peer_id(u) for u in self._user_peers]
+            if self._user_ids:
+                return self._user_ids[:]

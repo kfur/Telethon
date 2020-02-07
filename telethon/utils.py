@@ -12,8 +12,10 @@ import logging
 import math
 import mimetypes
 import os
+import pathlib
 import re
 import struct
+from collections import namedtuple
 from mimetypes import guess_extension
 from types import GeneratorType
 
@@ -66,6 +68,8 @@ VALID_USERNAME_RE = re.compile(
     r'|gif|vid|pic|bing|wiki|imdb|bold|vote|like|coub)$',
     re.IGNORECASE
 )
+
+_FileInfo = namedtuple('FileInfo', 'dc_id location size')
 
 _log = logging.getLogger(__name__)
 
@@ -208,6 +212,12 @@ def get_input_peer(entity, allow_self=True, check_hash=True):
     if isinstance(entity, types.InputUserSelf):
         return types.InputPeerSelf()
 
+    if isinstance(entity, types.InputUserFromMessage):
+        return types.InputPeerUserFromMessage(entity.peer, entity.msg_id, entity.user_id)
+
+    if isinstance(entity, types.InputChannelFromMessage):
+        return types.InputPeerChannelFromMessage(entity.peer, entity.msg_id, entity.channel_id)
+
     if isinstance(entity, types.UserEmpty):
         return types.InputPeerEmpty()
 
@@ -245,6 +255,9 @@ def get_input_channel(entity):
     if isinstance(entity, types.InputPeerChannel):
         return types.InputChannel(entity.channel_id, entity.access_hash)
 
+    if isinstance(entity, types.InputPeerChannelFromMessage):
+        return types.InputChannelFromMessage(entity.peer, entity.msg_id, entity.channel_id)
+
     _raise_cast_fail(entity, 'InputChannel')
 
 
@@ -281,6 +294,9 @@ def get_input_user(entity):
 
     if isinstance(entity, types.InputPeerUser):
         return types.InputUser(entity.user_id, entity.access_hash)
+
+    if isinstance(entity, types.InputPeerUserFromMessage):
+        return types.InputUserFromMessage(entity.peer, entity.msg_id, entity.user_id)
 
     _raise_cast_fail(entity, 'InputUser')
 
@@ -468,7 +484,10 @@ def get_input_media(
                 file=media, mime_type=mime, attributes=attrs)
 
     if isinstance(media, types.MessageMediaGame):
-        return types.InputMediaGame(id=media.game.id)
+        return types.InputMediaGame(id=types.InputGameID(
+            id=media.game.id,
+            access_hash=media.game.access_hash
+        ))
 
     if isinstance(media, types.MessageMediaContact):
         return types.InputMediaContact(
@@ -676,9 +695,14 @@ def get_input_location(location):
     Note that this returns a tuple ``(dc_id, location)``, the
     ``dc_id`` being present if known.
     """
+    info = _get_file_info(location)
+    return info.dc_id, info.location
+
+
+def _get_file_info(location):
     try:
         if location.SUBCLASS_OF_ID == 0x1523d462:
-            return None, location  # crc32(b'InputFileLocation'):
+            return _FileInfo(None, location, None)  # crc32(b'InputFileLocation'):
     except AttributeError:
         _raise_cast_fail(location, 'InputFileLocation')
 
@@ -691,19 +715,19 @@ def get_input_location(location):
         location = location.photo
 
     if isinstance(location, types.Document):
-        return (location.dc_id, types.InputDocumentFileLocation(
+        return _FileInfo(location.dc_id, types.InputDocumentFileLocation(
             id=location.id,
             access_hash=location.access_hash,
             file_reference=location.file_reference,
             thumb_size=''  # Presumably to download one of its thumbnails
-        ))
+        ), location.size)
     elif isinstance(location, types.Photo):
-        return (location.dc_id, types.InputPhotoFileLocation(
+        return _FileInfo(location.dc_id, types.InputPhotoFileLocation(
             id=location.id,
             access_hash=location.access_hash,
             file_reference=location.file_reference,
             thumb_size=location.sizes[-1].type
-        ))
+        ), _photo_size_byte_count(location.sizes[-1]))
 
     if isinstance(location, types.FileLocationToBeDeprecated):
         raise TypeError('Unavailable location cannot be used as input')
@@ -718,10 +742,12 @@ def _get_extension(file):
     """
     if isinstance(file, str):
         return os.path.splitext(file)[-1]
+    elif isinstance(file, pathlib.Path):
+        return file.suffix
     elif isinstance(file, bytes):
         kind = imghdr.what(io.BytesIO(file))
         return ('.' + kind) if kind else ''
-    elif isinstance(file, io.IOBase) and file.seekable():
+    elif isinstance(file, io.IOBase) and not isinstance(file, io.TextIOBase) and file.seekable():
         kind = imghdr.what(file)
         return ('.' + kind) if kind is not None else ''
     elif getattr(file, 'name', None):
@@ -846,11 +872,11 @@ def get_peer(peer):
             return types.PeerUser(peer.user_id)
 
         peer = get_input_peer(peer, allow_self=False, check_hash=False)
-        if isinstance(peer, types.InputPeerUser):
+        if isinstance(peer, (types.InputPeerUser, types.InputPeerUserFromMessage)):
             return types.PeerUser(peer.user_id)
         elif isinstance(peer, types.InputPeerChat):
             return types.PeerChat(peer.chat_id)
-        elif isinstance(peer, types.InputPeerChannel):
+        elif isinstance(peer, (types.InputPeerChannel, types.InputPeerChannelFromMessage)):
             return types.PeerChannel(peer.channel_id)
     except (AttributeError, TypeError):
         pass
@@ -1298,7 +1324,7 @@ def stripped_photo_to_jpg(stripped):
 
     Ported from https://github.com/telegramdesktop/tdesktop/blob/bec39d89e19670eb436dc794a8f20b657cb87c71/Telegram/SourceFiles/ui/image/image.cpp#L225
     """
-    # NOTE: Changes here should update _stripped_real_length
+    # NOTE: Changes here should update _photo_size_byte_count
     if len(stripped) < 3 or stripped[0] != 1:
         return stripped
 
@@ -1309,8 +1335,17 @@ def stripped_photo_to_jpg(stripped):
     return bytes(header) + stripped[3:] + footer
 
 
-def _stripped_real_length(stripped):
-    if len(stripped) < 3 or stripped[0] != 1:
-        return len(stripped)
+def _photo_size_byte_count(size):
+    if isinstance(size, types.PhotoSize):
+        return size.size
+    elif isinstance(size, types.PhotoStrippedSize):
+        if len(size.bytes) < 3 or size.bytes[0] != 1:
+            return len(size.bytes)
 
-    return len(stripped) + 622
+        return len(size.bytes) + 622
+    elif isinstance(size, types.PhotoCachedSize):
+        return len(size.bytes)
+    elif isinstance(size, types.PhotoSizeEmpty):
+        return 0
+    else:
+        return None

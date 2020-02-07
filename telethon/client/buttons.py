@@ -35,7 +35,8 @@ class ButtonMethods:
                 from telethon import Button
 
                 markup = client.build_reply_markup(Button.inline('hi'))
-                await client.send_message('click me', buttons=markup)
+                # later
+                await client.send_message(chat, 'click me', buttons=markup)
         """
         if buttons is None:
             return None
@@ -48,7 +49,7 @@ class ButtonMethods:
 
         if not utils.is_list_like(buttons):
             buttons = [[buttons]]
-        elif not utils.is_list_like(buttons[0]):
+        elif not buttons or not utils.is_list_like(buttons[0]):
             buttons = [buttons]
 
         is_inline = False

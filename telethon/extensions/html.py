@@ -126,7 +126,7 @@ def parse(html: str) -> Tuple[str, List[TypeMessageEntity]]:
     Parses the given HTML message and returns its stripped representation
     plus a list of the MessageEntity's that were found.
 
-    :param message: the message with HTML to be parsed.
+    :param html: the message with HTML to be parsed.
     :return: a tuple consisting of (clean message, [message entities]).
     """
     if not html:
@@ -168,9 +168,23 @@ def unparse(text: str, entities: Iterable[TypeMessageEntity], _offset: int = 0,
             continue
 
         skip_entity = False
-        entity_text = unparse(text=text[relative_offset:relative_offset + entity.length],
+        length = entity.length
+
+        # If we are in the middle of a surrogate nudge the position by +1.
+        # Otherwise we would end up with malformed text and fail to encode.
+        # For example of bad input: "Hi \ud83d\ude1c"
+        # https://en.wikipedia.org/wiki/UTF-16#U+010000_to_U+10FFFF
+        while (relative_offset < _length
+                and '\ud800' <= text[relative_offset] <= '\udfff'):
+            relative_offset += 1
+
+        while (relative_offset + length < _length
+                and '\ud800' <= text[relative_offset + length] <= '\udfff'):
+            length += 1
+
+        entity_text = unparse(text=text[relative_offset:relative_offset + length],
                               entities=entities[i + 1:],
-                              _offset=entity.offset, _length=entity.length)
+                              _offset=entity.offset, _length=length)
         entity_type = type(entity)
 
         if entity_type == MessageEntityBold:
@@ -208,6 +222,10 @@ def unparse(text: str, entities: Iterable[TypeMessageEntity], _offset: int = 0,
                         .format(entity.user_id, entity_text))
         else:
             skip_entity = True
-        last_offset = relative_offset + (0 if skip_entity else entity.length)
+        last_offset = relative_offset + (0 if skip_entity else length)
+
+    while last_offset < _length and '\ud800' <= text[last_offset] <= '\udfff':
+        last_offset += 1
+
     html.append(escape(text[last_offset:]))
     return _del_surrogate(''.join(html))

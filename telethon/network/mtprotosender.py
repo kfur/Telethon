@@ -128,6 +128,13 @@ class MTProtoSender:
     def is_connected(self):
         return self._user_connected
 
+    def _transport_connected(self):
+        return (
+            not self._reconnecting
+            and self._connection is not None
+            and self._connection._connected
+        )
+
     async def disconnect(self):
         """
         Cleanly disconnects the instance from the network, cancels
@@ -227,9 +234,9 @@ class MTProtoSender:
             break  # all steps done, break retry loop
         else:
             if not connected:
-                raise ConnectionError('Connection to Telegram failed %d time(s)', self._retries)
+                raise ConnectionError('Connection to Telegram failed {} time(s)'.format(self._retries))
 
-            e = ConnectionError('auth_key generation failed %d time(s)', self._retries)
+            e = ConnectionError('auth_key generation failed {} time(s)'.format(self._retries))
             await self._disconnect(error=e)
             raise e
 
