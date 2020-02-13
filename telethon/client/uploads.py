@@ -570,7 +570,10 @@ class UploadMethods:
             #         file = stream.read()
 
             if isinstance(file, typing.BinaryIO):
-                file = file.read()
+                if inspect.iscoroutinefunction(file.read):
+                    file = await file.read()
+                else:
+                    file = file.read()
             else:
                 get_req = req.Request(file, method='GET', headers=http_headers)
                 with req.urlopen(get_req) as resp:
