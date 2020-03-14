@@ -495,40 +495,42 @@ class UploadMethods:
         if isinstance(file, (types.InputFile, types.InputFileBig)):
             return file  # Already uploaded
 
-        # if not file_name and getattr(file, 'name', None):
-        #     file_name = file.name
         if file_size is None:
-            stream = req.urlopen(file)
-            file_size = int(stream.headers['Content-Length'])
+            if isinstance(file, str):
+                if os.path.isfile(file):
+                    file_size = os.path.getsize(file)
+                else:
+                    stream = req.urlopen(file)
+                    file_size = int(stream.headers['Content-Length'])
+            elif isinstance(file, bytes):
+                file_size = len(file)
+            elif hasattr(file, 'tell') and hasattr(file, 'read') and hasattr(file, 'seek'):
+                # `aiofiles` shouldn't base `IOBase` because they change the
+                # methods' definition. `seekable` would be `async` but since
+                # we won't get to check that, there's no need to maybe-await.
+                if isinstance(file, io.IOBase) and file.seekable():
+                    pos = file.tell()
+                else:
+                    pos = None
 
-        # if isinstance(file, str):
-        #     file_size = os.path.getsize(file)
-        # elif isinstance(file, bytes):
-        #     file_size = len(file)
-        # else:
-        #     # `aiofiles` shouldn't base `IOBase` because they change the
-        #     # methods' definition. `seekable` would be `async` but since
-        #     # we won't get to check that, there's no need to maybe-await.
-        #     if isinstance(file, io.IOBase) and file.seekable():
-        #         pos = file.tell()
-        #     else:
-        #         pos = None
+                # TODO Don't load the entire file in memory always
+                data = file.read()
+                if inspect.isawaitable(data):
+                    data = await data
 
-        #     # TODO Don't load the entire file in memory always
-        #     data = file.read()
-        #     if inspect.isawaitable(data):
-        #         data = await data
+                if pos is not None:
+                    file.seek(pos)
 
-        #     if pos is not None:
-        #         file.seek(pos)
+                if not isinstance(data, bytes):
+                    raise TypeError(
+                        'file descriptor returned {}, not bytes (you must '
+                        'open the file in bytes mode)'.format(type(data)))
 
-        #     if not isinstance(data, bytes):
-        #         raise TypeError(
-        #             'file descriptor returned {}, not bytes (you must '
-        #             'open the file in bytes mode)'.format(type(data)))
+                file = data
+                file_size = len(file)
 
-        #     file = data
-        #     file_size = len(file)
+            else:
+                raise Exception('file size required for uploading')
 
         # File will now either be a string or bytes
         if not part_size_kb:
@@ -565,16 +567,15 @@ class UploadMethods:
             # As this needs to be done always for small files,
             # might as well do it before anything else and
             # check the cache.
-            # if isinstance(file, str):
-            #     with open(file, 'rb') as stream:
-            #         file = stream.read()
-
-            if isinstance(file, typing.BinaryIO):
+            if isinstance(file, str) and os.path.isfile(file):
+                with open(file, 'rb') as stream:
+                    file = stream.read()
+            elif hasattr(file, 'read'):
                 if inspect.iscoroutinefunction(file.read):
                     file = await file.read()
                 else:
                     file = file.read()
-            else:
+            elif isinstance(file, str):
                 get_req = req.Request(file, method='GET', headers=http_headers)
                 with req.urlopen(get_req) as resp:
                     file = resp.read()
@@ -584,13 +585,13 @@ class UploadMethods:
         self._log[__name__].info('Uploading file of %d bytes in %d chunks of %d',
                                  file_size, part_count, part_size)
 
-        # with open(file, 'rb') if isinstance(file, str) else BytesIO(file)\
-        #         as stream:
-        if isinstance(file, typing.BinaryIO):
+        if isinstance(file, str) and os.path.isfile(file):
+            stream = open(file)
+        elif hasattr(file, 'read'):
             stream = file
-        elif not isinstance(file, str):
+        elif isinstance(file, bytes):
             stream = BytesIO(file)
-        elif 'stream' not in dir():
+        else:
             get_req = req.Request(file, method='GET', headers=http_headers)
             stream = req.urlopen(get_req)
 
@@ -645,6 +646,7 @@ class UploadMethods:
                 file_id, part_count, file_name, md5=hash_md5, size=file_size
             )
 
+
     # endregion
 
     async def _file_to_media(
@@ -661,31 +663,10 @@ class UploadMethods:
         if as_image is None:
             as_image = utils.is_image(file) and not force_document
 
-        # `aiofiles` do not base `io.IOBase` but do have `read`, so we
-        # just check for the read attribute to see if it's file-like.
-        if not isinstance(file, (str, bytes)) and not hasattr(file, 'read'):
-            # The user may pass a Message containing media (or the media,
-            # or anything similar) that should be treated as a file. Try
-            # getting the input media for whatever they passed and send it.
-            #
-            # We pass all attributes since these will be used if the user
-            # passed :tl:`InputFile`, and all information may be relevant.
-            try:
-                return (None, utils.get_input_media(
-                    file,
-                    is_photo=as_image,
-                    attributes=attributes,
-                    force_document=force_document,
-                    voice_note=voice_note,
-                    video_note=video_note,
-                    supports_streaming=supports_streaming
-                ), as_image)
-            except TypeError:
-                # Can't turn whatever was given into media
-                return None, None, as_image
-
         media = None
         file_handle = None
+        if isinstance(file, types.InputMediaUploadedDocument):
+            file_handle = file
         if not isinstance(file, str) or os.path.isfile(file):
             file_handle = await self.upload_file(
                 _resize_photo_if_needed(file, as_image),
@@ -706,6 +687,34 @@ class UploadMethods:
         if media:
             pass  # Already have media, don't check the rest
         elif not file_handle:
+            # `aiofiles` do not base `io.IOBase` but do have `read`, so we
+            # just check for the read attribute to see if it's file-like.
+            if not isinstance(file, (str, bytes)) and not hasattr(file, 'read'):
+                # The user may pass a Message containing media (or the media,
+                # or anything similar) that should be treated as a file. Try
+                # getting the input media for whatever they passed and send it.
+                #
+                # We pass all attributes since these will be used if the user
+                # passed :tl:`InputFile`, and all information may be relevant.
+                try:
+                    input_kw = {}
+                    if thumb:
+                        if isinstance(thumb, pathlib.Path):
+                            thumb = str(thumb.absolute())
+                        input_kw['thumb'] = await self.upload_file(thumb)
+                    return (None, utils.get_input_media(
+                        file,
+                        is_photo=as_image,
+                        attributes=attributes,
+                        force_document=force_document,
+                        voice_note=voice_note,
+                        video_note=video_note,
+                        supports_streaming=supports_streaming,
+                        thumb=input_kw
+                    ), as_image)
+                except TypeError:
+                    # Can't turn whatever was given into media
+                    return None, None, as_image
             raise ValueError(
                 'Failed to convert {} to media. Not an existing file, '
                 'an HTTP URL or a valid bot-API-like file ID'.format(file)
