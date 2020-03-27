@@ -575,6 +575,8 @@ class UploadMethods:
                     file = await file.read()
                 else:
                     file = file.read()
+                    if inspect.isawaitable(file):
+                        file = await file
             elif isinstance(file, str):
                 get_req = req.Request(file, method='GET', headers=http_headers)
                 with req.urlopen(get_req) as resp:
@@ -586,7 +588,7 @@ class UploadMethods:
                                  file_size, part_count, part_size)
 
         if isinstance(file, str) and os.path.isfile(file):
-            stream = open(file)
+            stream = open(file, mode='rb')
         elif hasattr(file, 'read'):
             stream = file
         elif isinstance(file, bytes):
@@ -604,6 +606,8 @@ class UploadMethods:
                     part = await stream.read(part_size)
                 else:
                     part = stream.read(part_size)
+                    if inspect.isawaitable(part):
+                        part = await part
             else:
                 raise Exception(
                     "Failed read from stream, there aren't read attribute")
