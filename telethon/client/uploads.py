@@ -555,13 +555,13 @@ class UploadMethods:
             if part == b'':
                 part_count = part_index
                 break
-            #if len(part) != part_size:
-            #    print("Len mismatch: want part len = ", part_size, " real =", len(part))
-            #    dat = b'\0' * (part_size - len(part))
-            #    part += dat
-            #    if not is_large:
-            #        hash_md5 = hashlib.md5()
-            #        hash_md5.update(file + dat)
+            if len(part) != part_size:
+                print("Len mismatch: want part len = ", part_size, " real =", len(part))
+                dat = b'\0' * (part_size - len(part))
+                part += dat
+                if not is_large:
+                    hash_md5 = hashlib.md5()
+                    hash_md5.update(file + dat)
             # The SavePartRequest is different depending on whether
             # the file is too large or not (over or less than 10MB)
             if is_large:
