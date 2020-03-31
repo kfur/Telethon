@@ -15,15 +15,22 @@ __log__ = logging.getLogger(__name__)
 
 
 try:
-    import cryptg
-    __log__.info('cryptg detected, it will be used for encryption')
+    import tgcrypto
+    __log__.info('tgcrypto detected, it will be used for encryption')
 except ImportError:
-    cryptg = None
-    if libssl.encrypt_ige and libssl.decrypt_ige:
-        __log__.info('libssl detected, it will be used for encryption')
-    else:
-        __log__.info('cryptg module not installed and libssl not found, '
-                     'falling back to (slower) Python encryption')
+    tgcrypto = None
+
+    try:
+        import cryptg
+        __log__.info('cryptg detected, it will be used for encryption')
+    except ImportError:
+        cryptg = None
+        if libssl.encrypt_ige and libssl.decrypt_ige:
+            __log__.info('libssl detected, it will be used for encryption')
+        else:
+            __log__.info('cryptg/tgcrypto module not installed and libssl not found, '
+                         'falling back to (slower) Python encryption')
+
 
 
 class AES:
@@ -37,6 +44,9 @@ class AES:
         Decrypts the given text in 16-bytes blocks by using the
         given key and 32-bytes initialization vector.
         """
+
+        if tgcrypto:
+            return tgcrypto.ige256_decrypt(cipher_text, key, iv)
         if cryptg:
             return cryptg.decrypt_ige(cipher_text, key, iv)
         if libssl.decrypt_ige:
@@ -78,6 +88,8 @@ class AES:
         if padding:
             plain_text += os.urandom(16 - padding)
 
+        if tgcrypto:
+            return tgcrypto.ige256_encrypt(plain_text, key, iv)
         if cryptg:
             return cryptg.encrypt_ige(plain_text, key, iv)
         if libssl.encrypt_ige:
