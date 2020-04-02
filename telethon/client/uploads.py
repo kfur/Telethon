@@ -555,7 +555,7 @@ class UploadMethods:
             if part == b'':
                 part_count = part_index
                 break
-            if len(part) != part_size:
+            if len(part) != part_size and part_index != part_count - 1:
                 print("Len mismatch: want part len = ", part_size, " real =", len(part))
                 dat = b'\0' * (part_size - len(part))
                 part += dat
