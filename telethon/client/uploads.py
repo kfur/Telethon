@@ -502,7 +502,7 @@ class UploadMethods:
                 else:
                     stream = req.urlopen(file)
                     file_size = int(stream.headers['Content-Length'])
-            elif isinstance(file, bytes):
+            elif isinstance(file, (bytes, bytearray)):
                 file_size = len(file)
             elif hasattr(file, 'tell') and hasattr(file, 'read') and hasattr(file, 'seek'):
                 # `aiofiles` shouldn't base `IOBase` because they change the
@@ -521,7 +521,7 @@ class UploadMethods:
                 if pos is not None:
                     file.seek(pos)
 
-                if not isinstance(data, bytes):
+                if not isinstance(data, (bytes, bytearray)):
                     raise TypeError(
                         'file descriptor returned {}, not bytes (you must '
                         'open the file in bytes mode)'.format(type(data)))
@@ -591,7 +591,7 @@ class UploadMethods:
             stream = open(file, mode='rb')
         elif hasattr(file, 'read'):
             stream = file
-        elif isinstance(file, bytes):
+        elif isinstance(file, (bytes, bytearray)):
             stream = BytesIO(file)
         else:
             get_req = req.Request(file, method='GET', headers=http_headers)
