@@ -502,7 +502,10 @@ def _write_arg_to_bytes(builder, arg, args, name=None):
         pass  # These are actually NOT written! Only used for flags
 
     elif 'bytes' == arg.type:
-        builder.write('self.serialize_bytes({})', name)
+        if name in ['x', 'self.data', 'self.srp_B', 'self.secret', 'self.waveform', 'self.new_password_hash', 'self.option']:
+            builder.write('self.serialize_bytes({})', name)
+        else:
+            builder.write('*self.serialize_bytes_tuple({})', name)
 
     elif 'date' == arg.type:  # Custom format
         builder.write('self.serialize_datetime({})', name)
