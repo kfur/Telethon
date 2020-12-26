@@ -134,6 +134,38 @@ class TLObject:
         return b''.join(r)
 
     @staticmethod
+    def serialize_bytes_tuple(data):
+        """Write bytes by using Telegram guidelines"""
+        if not isinstance(data, (bytes, bytearray)):
+            if isinstance(data, str):
+                data = data.encode('utf-8')
+            else:
+                raise TypeError(
+                    'bytes or str expected, not {}'.format(type(data)))
+
+        r = ()
+        if len(data) < 254:
+            padding = (len(data) + 1) % 4
+            if padding != 0:
+                padding = 4 - padding
+            r += (bytes([len(data)]), data)
+
+        else:
+            padding = len(data) % 4
+            if padding != 0:
+                padding = 4 - padding
+
+            r += (bytes([
+                254,
+                len(data) % 256,
+                (len(data) >> 8) % 256,
+                (len(data) >> 16) % 256
+            ]), data)
+
+        r += (bytes(padding), )
+        return r
+
+    @staticmethod
     def serialize_datetime(dt):
         if not dt and not isinstance(dt, timedelta):
             return b'\0\0\0\0'
