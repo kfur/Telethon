@@ -1,4 +1,7 @@
-import gzip
+try:
+    from isal import igzip as gzip
+except:
+    import gzip
 import struct
 
 from .. import TLObject, TLRequest
