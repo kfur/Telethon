@@ -583,7 +583,7 @@ class UploadMethods:
                     file = resp.read()
             hash_md5.update(file)
 
-        part_count = (file_size + part_size - 1) // part_size
+        part_count = int((file_size + part_size - 1) // part_size)
         self._log[__name__].info('Uploading file of %d bytes in %d chunks of %d',
                                  file_size, part_count, part_size)
 
