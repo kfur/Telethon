@@ -187,6 +187,13 @@ def _write_class_init(tlobject, kind, type_constructors, builder):
                     crc32(tlobject.result.encode('ascii')))
     builder.writeln()
 
+    slots_args = [f'\'{a.name}\',' for a in tlobject.real_args]
+    if slots_args:
+        builder.writeln('__slots__ = ' + " ".join(slots_args))
+    else:
+        builder.writeln('__slots__ = ()')
+    builder.writeln()
+
     # Convert the args to string parameters, flags having =None
     args = ['{}: {}{}'.format(
         a.name, a.type_hint(), '=None' if a.is_flag or a.can_be_inferred else '')
