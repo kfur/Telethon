@@ -581,6 +581,7 @@ class UploadMethods:
                 get_req = req.Request(file, method='GET', headers=http_headers)
                 with req.urlopen(get_req) as resp:
                     file = resp.read()
+            file_size = len(file)
             hash_md5.update(file)
 
         part_count = int((file_size + part_size - 1) // part_size)
