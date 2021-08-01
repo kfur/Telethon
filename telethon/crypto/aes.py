@@ -13,23 +13,29 @@ from . import libssl
 
 __log__ = logging.getLogger(__name__)
 
-
 try:
-    import tgcrypto
-    __log__.info('tgcrypto detected, it will be used for encryption')
+    import libaesni_py
+    __log__.info('libaesni_py detected, it will be used for encryption')
 except ImportError:
-    tgcrypto = None
+    libaesni_py = None
 
+if libaesni_py is None:
     try:
-        import cryptg
-        __log__.info('cryptg detected, it will be used for encryption')
+        import tgcrypto
+        __log__.info('tgcrypto detected, it will be used for encryption')
     except ImportError:
-        cryptg = None
-        if libssl.encrypt_ige and libssl.decrypt_ige:
-            __log__.info('libssl detected, it will be used for encryption')
-        else:
-            __log__.info('cryptg/tgcrypto module not installed and libssl not found, '
-                         'falling back to (slower) Python encryption')
+        tgcrypto = None
+
+        try:
+            import cryptg
+            __log__.info('cryptg detected, it will be used for encryption')
+        except ImportError:
+            cryptg = None
+            if libssl.encrypt_ige and libssl.decrypt_ige:
+                __log__.info('libssl detected, it will be used for encryption')
+            else:
+                __log__.info('cryptg/tgcrypto module not installed and libssl not found, '
+                             'falling back to (slower) Python encryption')
 
 
 
@@ -45,6 +51,8 @@ class AES:
         given key and 32-bytes initialization vector.
         """
 
+        if libaesni_py:
+            return libaesni_py.ige256_decrypt(cipher_text, key, iv)
         if tgcrypto:
             return tgcrypto.ige256_decrypt(cipher_text, key, iv)
         if cryptg:
@@ -88,6 +96,8 @@ class AES:
         if padding:
             plain_text += os.urandom(16 - padding)
 
+        if libaesni_py:
+            return libaesni_py.ige256_encrypt(plain_text, key, iv)
         if tgcrypto:
             return tgcrypto.ige256_encrypt(plain_text, key, iv)
         if cryptg:
