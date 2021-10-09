@@ -49,7 +49,7 @@ class Connection(abc.ABC):
         if not self._proxy:
             self._reader, self._writer = await asyncio.wait_for(
                 asyncio.open_connection(
-                    self._ip, self._port, loop=self._loop, ssl=ssl),
+                    self._ip, self._port, ssl=ssl),
                 timeout=timeout
             )
         else:
@@ -87,7 +87,7 @@ class Connection(abc.ABC):
                 s.setblocking(False)
 
             self._reader, self._writer = \
-                await asyncio.open_connection(sock=s, loop=self._loop)
+                await asyncio.open_connection(sock=s)
 
         self._codec = self.packet_codec(self)
         self._init_conn()
