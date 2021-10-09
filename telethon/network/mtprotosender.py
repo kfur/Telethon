@@ -54,7 +54,7 @@ class MTProtoSender:
         self._auth_key_callback = auth_key_callback
         self._update_callback = update_callback
         self._auto_reconnect_callback = auto_reconnect_callback
-        self._connect_lock = asyncio.Lock(loop=loop)
+        self._connect_lock = asyncio.Lock()
 
         # Whether the user has explicitly connected or disconnected.
         #

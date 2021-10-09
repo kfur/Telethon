@@ -318,7 +318,7 @@ class TelegramBaseClient(abc.ABC):
         # being ``n`` the amount of borrows a given sender has; once ``n``
         # reaches ``0`` it should be disconnected and removed.
         self._borrowed_senders = {}
-        self._borrow_sender_lock = asyncio.Lock(loop=self._loop)
+        self._borrow_sender_lock = asyncio.Lock()
 
         self._updates_handle = None
         self._last_request = time.time()
