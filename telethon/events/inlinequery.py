@@ -156,9 +156,9 @@ class InlineQuery(EventBuilder):
 
                 gallery (`bool`, optional):
                     Whether the results should show as a gallery (grid) or not.
-                
+
                 next_offset (`str`, optional):
-                    The offset the client will send when the user scrolls the 
+                    The offset the client will send when the user scrolls the
                     results and it repeats the request.
 
                 private (`bool`, optional):
@@ -194,7 +194,7 @@ class InlineQuery(EventBuilder):
                 futures = [self._as_future(x, self._client.loop)
                            for x in results]
 
-                await asyncio.wait(futures, loop=self._client.loop)
+                await asyncio.wait(futures)
 
                 # All futures will be in the `done` *set* that `wait` returns.
                 #

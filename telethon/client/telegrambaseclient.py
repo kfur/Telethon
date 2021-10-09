@@ -325,8 +325,8 @@ class TelegramBaseClient(abc.ABC):
         self._channel_pts = {}
 
         if sequential_updates:
-            self._updates_queue = asyncio.Queue(loop=self._loop)
-            self._dispatching_updates_queue = asyncio.Event(loop=self._loop)
+            self._updates_queue = asyncio.Queue()
+            self._dispatching_updates_queue = asyncio.Event()
         else:
             # Use a set of pending instead of a queue so we can properly
             # terminate all pending updates on disconnect.
@@ -506,7 +506,7 @@ class TelegramBaseClient(abc.ABC):
             for task in self._updates_queue:
                 task.cancel()
 
-            await asyncio.wait(self._updates_queue, loop=self._loop)
+            await asyncio.wait(self._updates_queue)
             self._updates_queue.clear()
 
         pts, date = self._state_cache[None]
