@@ -22,6 +22,11 @@ from ..tl.types import (
 )
 from ..crypto import AuthKey
 from ..helpers import retry_range
+import time
+import os
+
+current_five_min = int(time.time() / 300)
+errors_count = 0
 
 
 class MTProtoSender:
@@ -435,6 +440,8 @@ class MTProtoSender:
             self._log.debug('Encrypted messages put in a queue to be sent')
 
     async def _recv_loop(self):
+        global current_five_min
+        global errors_count
         """
         This loop is responsible for reading all incoming responses
         from the network, decrypting and handling or dispatching them.
@@ -462,6 +469,14 @@ class MTProtoSender:
                 # should not be considered safe and it should be ignored.
                 self._log.warning('Security error while unpacking a '
                                   'received message: %s', e)
+                if current_five_min == int(time.time() / 300):
+                    errors_count += 1
+                    if errors_count >= 10:
+                        os.exit(-1)
+                else:
+                    current_five_min = int(time.time() / 300)
+                    errors_count = 0
+                
                 continue
             except BufferError as e:
                 if isinstance(e, InvalidBufferError) and e.code == 404:
