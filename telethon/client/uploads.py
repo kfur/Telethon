@@ -95,6 +95,7 @@ class UploadMethods:
             *,
             caption: typing.Union[str, typing.Sequence[str]] = None,
             force_document: bool = False,
+            file_size: int = None,
             clear_draft: bool = False,
             progress_callback: 'hints.ProgressCallback' = None,
             reply_to: 'hints.MessageIDLike' = None,
@@ -102,12 +103,17 @@ class UploadMethods:
             thumb: 'hints.FileLike' = None,
             allow_cache: bool = True,
             parse_mode: str = (),
+            formatting_entities: typing.Optional[typing.List[types.TypeMessageEntity]] = None,
             voice_note: bool = False,
             video_note: bool = False,
-            buttons: 'hints.MarkupLike' = None,
+            buttons: typing.Optional['hints.MarkupLike'] = None,
             silent: bool = None,
+            background: bool = None,
             supports_streaming: bool = False,
             schedule: 'hints.DateLike' = None,
+            comment_to: 'typing.Union[int, types.Message]' = None,
+            ttl: int = None,
+            nosound_video: bool = None,
             **kwargs) -> 'types.Message':
         """
         Sends message with the given file to the specified entity.
@@ -155,6 +161,10 @@ class UploadMethods:
 
                 * A handle to an uploaded file (from `upload_file`).
 
+                * A :tl:`InputMedia` instance. For example, if you want to
+                  send a dice use :tl:`InputMediaDice`, or if you want to
+                  send a contact use :tl:`InputMediaContact`.
+
                 To send an album, you should provide a list in this parameter.
 
                 If a list or similar is provided, the files in it will be
@@ -170,6 +180,13 @@ class UploadMethods:
                 If left to `False` and the file is a path that ends with
                 the extension of an image file or a video file, it will be
                 sent as such. Otherwise always as a document.
+
+            file_size (`int`, optional):
+                The size of the file to be uploaded if it needs to be uploaded,
+                which will be determined automatically if not specified.
+
+                If the file size can't be determined beforehand, the entire
+                file will be read in-memory to find out how large it is.
 
             clear_draft (`bool`, optional):
                 Whether the existing draft should be cleared or not.
@@ -189,9 +206,14 @@ class UploadMethods:
                 Optional JPEG thumbnail (for documents). **Telegram will
                 ignore this parameter** unless you pass a ``.jpg`` file!
 
-                The file must also be small in dimensions and in-disk size.
-                Successful thumbnails were files below 20kb and 200x200px.
+                The file must also be small in dimensions and in disk size.
+                Successful thumbnails were files below 20kB and 320x320px.
                 Width/height and dimensions/size ratios may be important.
+                For Telegram to accept a thumbnail, you must provide the
+                dimensions of the underlying media through ``attributes=``
+                with :tl:`DocumentAttributesVideo` or by installing the
+                optional ``hachoir`` dependency.
+
 
             allow_cache (`bool`, optional):
                 This parameter currently does nothing, but is kept for
@@ -203,6 +225,9 @@ class UploadMethods:
                 <telethon.client.messageparse.MessageParseMethods.parse_mode>`
                 property for allowed values. Markdown parsing will be used by
                 default.
+
+            formatting_entities (`list`, optional):
+                A list of message formatting entities. When provided, the ``parse_mode`` is ignored.
 
             voice_note (`bool`, optional):
                 If `True` the audio will be sent as a voice note.
@@ -223,6 +248,9 @@ class UploadMethods:
                 the person has the chat muted). Set it to `True` to alter
                 this behaviour.
 
+            background (`bool`, optional):
+                Whether the message should be send in background.
+
             supports_streaming (`bool`, optional):
                 Whether the sent video supports streaming or not. Note that
                 Telegram only recognizes as streamable some formats like MP4,
@@ -234,6 +262,35 @@ class UploadMethods:
                 If set, the file won't send immediately, and instead
                 it will be scheduled to be automatically sent at a later
                 time.
+
+            comment_to (`int` | `Message <telethon.tl.custom.message.Message>`, optional):
+                Similar to ``reply_to``, but replies in the linked group of a
+                broadcast channel instead (effectively leaving a "comment to"
+                the specified message).
+
+                This parameter takes precedence over ``reply_to``. If there is
+                no linked chat, `telethon.errors.sgIdInvalidError` is raised.
+
+            ttl (`int`. optional):
+                The Time-To-Live of the file (also known as "self-destruct timer"
+                or "self-destructing media"). If set, files can only be viewed for
+                a short period of time before they disappear from the message
+                history automatically.
+
+                The value must be at least 1 second, and at most 60 seconds,
+                otherwise Telegram will ignore this parameter.
+
+                Not all types of media can be used with this parameter, such
+                as text documents, which will fail with ``TtlMediaInvalidError``.
+
+            nosound_video (`bool`, optional):
+                Only applicable when sending a video file without an audio
+                track. If set to ``True``, the video will be displayed in
+                Telegram as a video. If set to ``False``, Telegram will attempt
+                to display the video as an animated gif. (It may still display
+                as a video due to other factors.) The value is ignored if set
+                on non-video files. This is set to ``True`` for albums, as gifs
+                cannot be sent in albums.
 
         Returns
             The `Message <telethon.tl.custom.message.Message>` (or messages)
@@ -263,6 +320,26 @@ class UploadMethods:
                     '/my/photos/holiday2.jpg',
                     '/my/drawings/portrait.png'
                 ])
+
+                # Printing upload progress
+                def callback(current, total):
+                    print('Uploaded', current, 'out of', total,
+                          'bytes: {:.2%}'.format(current / total))
+
+                await client.send_file(chat, file, progress_callback=callback)
+
+                # Dices, including dart and other future emoji
+                from telethon.tl import types
+                await client.send_file(chat, types.InputMediaDice(''))
+                await client.send_file(chat, types.InputMediaDice('🎯'))
+
+                # Contacts
+                await client.send_file(chat, types.InputMediaContact(
+                    phone_number='+34 123 456 789',
+                    first_name='Example',
+                    last_name='',
+                    vcard=''
+                ))
         """
         # TODO Properly implement allow_cache to reuse the sha256 of the file
         # i.e. `None` was used
@@ -272,72 +349,54 @@ class UploadMethods:
         if not caption:
             caption = ''
 
+        entity = await self.get_input_entity(entity)
+        if comment_to is not None:
+            entity, reply_to = await self._get_comment_data(entity, comment_to)
+        else:
+            reply_to = utils.get_message_id(reply_to)
+
         # First check if the user passed an iterable, in which case
-        # we may want to send as an album if all are photo files.
+        # we may want to send grouped.
         if utils.is_list_like(file):
-            media_captions = []
-            document_captions = []
+            sent_count = 0
+            used_callback = None if not progress_callback else (
+                lambda s, t: progress_callback(sent_count + s, len(file))
+            )
+
             if utils.is_list_like(caption):
                 captions = caption
             else:
                 captions = [caption]
 
-            # TODO Fix progress_callback
-            media = []
-            if force_document:
-                documents = file
-            else:
-                documents = []
-                for doc, cap in itertools.zip_longest(file, captions):
-                    if utils.is_image(doc) or utils.is_video(doc):
-                        media.append(doc)
-                        media_captions.append(cap)
-                    else:
-                        documents.append(doc)
-                        document_captions.append(cap)
-
             result = []
-            while media:
+            while file:
                 result += await self._send_album(
-                    entity, media[:10], caption=media_captions[:10],
-                    progress_callback=progress_callback, reply_to=reply_to,
+                    entity, file[:10], caption=captions[:10],
+                    progress_callback=used_callback, reply_to=reply_to,
                     parse_mode=parse_mode, silent=silent, schedule=schedule,
-                    supports_streaming=supports_streaming, clear_draft=clear_draft
+                    supports_streaming=supports_streaming, clear_draft=clear_draft,
+                    force_document=force_document, background=background,
                 )
-                media = media[10:]
-                media_captions = media_captions[10:]
-
-            for doc, cap in zip(documents, captions):
-                result.append(await self.send_file(
-                    entity, doc, allow_cache=allow_cache,
-                    caption=cap, force_document=force_document,
-                    progress_callback=progress_callback, reply_to=reply_to,
-                    attributes=attributes, thumb=thumb, voice_note=voice_note,
-                    video_note=video_note, buttons=buttons, silent=silent,
-                    supports_streaming=supports_streaming, schedule=schedule,
-                    clear_draft=clear_draft,
-                    **kwargs
-                ))
+                file = file[10:]
+                captions = captions[10:]
+                sent_count += 10
 
             return result
 
-        entity = await self.get_input_entity(entity)
-        reply_to = utils.get_message_id(reply_to)
-
-        # Not document since it's subject to change.
-        # Needed when a Message is passed to send_message and it has media.
-        if 'entities' in kwargs:
-            msg_entities = kwargs['entities']
+        if formatting_entities is not None:
+            msg_entities = formatting_entities
         else:
             caption, msg_entities =\
                 await self._parse_message_text(caption, parse_mode)
 
         file_handle, media, image = await self._file_to_media(
             file, force_document=force_document,
+            file_size=file_size,
             progress_callback=progress_callback,
-            attributes=attributes, allow_cache=allow_cache, thumb=thumb,
+            attributes=attributes,  allow_cache=allow_cache, thumb=thumb,
             voice_note=voice_note, video_note=video_note,
-            supports_streaming=supports_streaming
+            supports_streaming=supports_streaming, ttl=ttl,
+            nosound_video=nosound_video,
         )
 
         # e.g. invalid cast from :tl:`MessageMediaWebPage`
@@ -345,15 +404,14 @@ class UploadMethods:
             raise TypeError('Cannot use {!r} as file'.format(file))
 
         markup = self.build_reply_markup(buttons)
+        reply_to = None if reply_to is None else types.InputReplyToMessage(reply_to)
         request = functions.messages.SendMediaRequest(
             entity, media, reply_to=reply_to, message=caption,
             entities=msg_entities, reply_markup=markup, silent=silent,
-            schedule_date=schedule, clear_draft=clear_draft
+            schedule_date=schedule, clear_draft=clear_draft,
+            background=background
         )
-        msg = self._get_response_message(request, await self(request), entity)
-        await self._cache_media(msg, file, file_handle, image=image)
-
-        return msg
+        return self._get_response_message(request, await self(request), entity)
 
     async def _send_album(self: 'TelegramClient', entity, files, caption='',
                           progress_callback=None, reply_to=None,
