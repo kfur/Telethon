@@ -708,112 +708,108 @@ class UploadMethods:
     # endregion
 
     async def _file_to_media(
-            self, file, force_document=False,
+            self, file, force_document=False, file_size=None,
             progress_callback=None, attributes=None, thumb=None,
             allow_cache=True, voice_note=False, video_note=False,
-            supports_streaming=False, mime_type=None, as_image=None):
+            supports_streaming=False, mime_type=None, as_image=None,
+            ttl=None, nosound_video=None):
         if not file:
             return None, None, None
 
         if isinstance(file, pathlib.Path):
             file = str(file.absolute())
 
+        is_image = utils.is_image(file)
         if as_image is None:
-            as_image = utils.is_image(file) and not force_document
+            as_image = is_image and not force_document
+
+        # `aiofiles` do not base `io.IOBase` but do have `read`, so we
+        # just check for the read attribute to see if it's file-like.
+        if not isinstance(file, (str, bytes, types.InputFile, types.InputFileBig))\
+                and not hasattr(file, 'read'):
+            # The user may pass a Message containing media (or the media,
+            # or anything similar) that should be treated as a file. Try
+            # getting the input media for whatever they passed and send it.
+            #
+            # We pass all attributes since these will be used if the user
+            # passed :tl:`InputFile`, and all information may be relevant.
+            try:
+                return (None, utils.get_input_media(
+                    file,
+                    is_photo=as_image,
+                    attributes=attributes,
+                    force_document=force_document,
+                    voice_note=voice_note,
+                    video_note=video_note,
+                    supports_streaming=supports_streaming,
+                    ttl=ttl
+                ), as_image)
+            except TypeError:
+                # Can't turn whatever was given into media
+                return None, None, as_image
 
         media = None
         file_handle = None
-        if isinstance(file, types.InputMediaUploadedDocument):
+
+        if isinstance(file, (types.InputFile, types.InputFileBig)):
             file_handle = file
-        if not isinstance(file, str) or os.path.isfile(file):
+        elif not isinstance(file, str) or os.path.isfile(file):
             file_handle = await self.upload_file(
                 _resize_photo_if_needed(file, as_image),
+                file_size=file_size,
                 progress_callback=progress_callback
             )
         elif re.match('https?://', file):
             if as_image:
-                media = types.InputMediaPhotoExternal(file)
-            elif not force_document and utils.is_gif(file):
-                media = types.InputMediaGifExternal(file, '')
+                media = types.InputMediaPhotoExternal(file, ttl_seconds=ttl)
             else:
-                media = types.InputMediaDocumentExternal(file)
+                media = types.InputMediaDocumentExternal(file, ttl_seconds=ttl)
         else:
             bot_file = utils.resolve_bot_file_id(file)
             if bot_file:
-                media = utils.get_input_media(bot_file)
+                media = utils.get_input_media(bot_file, ttl=ttl)
 
         if media:
             pass  # Already have media, don't check the rest
         elif not file_handle:
-            # `aiofiles` do not base `io.IOBase` but do have `read`, so we
-            # just check for the read attribute to see if it's file-like.
-            if not isinstance(file, (str, bytes)) and not hasattr(file, 'read'):
-                # The user may pass a Message containing media (or the media,
-                # or anything similar) that should be treated as a file. Try
-                # getting the input media for whatever they passed and send it.
-                #
-                # We pass all attributes since these will be used if the user
-                # passed :tl:`InputFile`, and all information may be relevant.
-                try:
-                    input_kw = {}
-                    if thumb:
-                        if isinstance(thumb, pathlib.Path):
-                            thumb = str(thumb.absolute())
-                        input_kw['thumb'] = await self.upload_file(thumb)
-                    return (None, utils.get_input_media(
-                        file,
-                        is_photo=as_image,
-                        attributes=attributes,
-                        force_document=force_document,
-                        voice_note=voice_note,
-                        video_note=video_note,
-                        supports_streaming=supports_streaming,
-                        thumb=input_kw
-                    ), as_image)
-                except TypeError:
-                    # Can't turn whatever was given into media
-                    return None, None, as_image
             raise ValueError(
                 'Failed to convert {} to media. Not an existing file, '
                 'an HTTP URL or a valid bot-API-like file ID'.format(file)
             )
         elif as_image:
-            media = types.InputMediaUploadedPhoto(file_handle)
+            media = types.InputMediaUploadedPhoto(file_handle, ttl_seconds=ttl)
         else:
             attributes, mime_type = utils.get_attributes(
                 file,
                 mime_type=mime_type,
                 attributes=attributes,
-                force_document=force_document,
+                force_document=force_document and not is_image,
                 voice_note=voice_note,
                 video_note=video_note,
-                supports_streaming=supports_streaming
+                supports_streaming=supports_streaming,
+                thumb=thumb
             )
 
-            input_kw = {}
-            if thumb:
+            if not thumb:
+                thumb = None
+            else:
                 if isinstance(thumb, pathlib.Path):
                     thumb = str(thumb.absolute())
-                input_kw['thumb'] = await self.upload_file(thumb)
+                thumb = await self.upload_file(thumb, file_size=file_size)
+
+            # setting `nosound_video` to `True` doesn't affect videos with sound
+            # instead it prevents sending silent videos as GIFs
+            nosound_video = nosound_video if mime_type.split("/")[0] == 'video' else None
 
             media = types.InputMediaUploadedDocument(
                 file=file_handle,
                 mime_type=mime_type,
                 attributes=attributes,
-                **input_kw
+                thumb=thumb,
+                force_file=force_document and not is_image,
+                ttl_seconds=ttl,
+                nosound_video=nosound_video
             )
         return file_handle, media, as_image
-
-    async def _cache_media(self: 'TelegramClient', msg, file, file_handle, image):
-        if file and msg and isinstance(file_handle,
-                                       custom.InputSizedFile):
-            # There was a response message and we didn't use cached
-            # version, so cache whatever we just sent to the database.
-            md5, size = file_handle.md5, file_handle.size
-            if image:
-                to_cache = utils.get_input_photo(msg.media.photo)
-            else:
-                to_cache = utils.get_input_document(msg.media.document)
-            self.session.cache_file(md5, size, to_cache)
 
     # endregion
