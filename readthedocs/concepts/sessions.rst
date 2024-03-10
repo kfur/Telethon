@@ -100,6 +100,9 @@ There are other community-maintained implementations available:
 * `Redis <https://github.com/ezdev128/telethon-session-redis>`_:
   stores all sessions in a single Redis data store.
 
+* `MongoDB <https://github.com/watzon/telethon-session-mongo>`_:
+  stores the current session in a MongoDB database.
+
 
 Creating your Own Storage
 =========================
@@ -140,7 +143,7 @@ output (likely your terminal).
 .. warning::
 
     **Keep this string safe!** Anyone with this string can use it
-    to login into your account and do anything they want to to do.
+    to login into your account and do anything they want to.
 
     This is similar to leaking your ``*.session`` files online,
     but it is easier to leak a string than it is to leak a file.

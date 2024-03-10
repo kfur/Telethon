@@ -28,6 +28,7 @@ AUTO_CASTS = {
     'InputMessage': 'utils.get_input_message({})',
     'InputDocument': 'utils.get_input_document({})',
     'InputChatPhoto': 'utils.get_input_chat_photo({})',
+    'InputGroupCall': 'utils.get_input_group_call({})',
 }
 
 NAMED_AUTO_CASTS = {
@@ -48,13 +49,6 @@ NAMED_BLACKLIST = {
 
 BASE_TYPES = ('string', 'bytes', 'int', 'long', 'int128',
               'int256', 'double', 'Bool', 'true', 'date')
-
-# Patched types {fullname: custom.ns.Name}
-PATCHED_TYPES = {
-    'messageEmpty': 'message.Message',
-    'message': 'message.Message',
-    'messageService': 'message.Message'
-}
 
 
 def _write_modules(
@@ -156,11 +150,8 @@ def _write_modules(
 
             # Generate the class for every TLObject
             for t in tlobjects:
-                if t.fullname in PATCHED_TYPES:
-                    builder.writeln('{} = None  # Patched', t.class_name)
-                else:
-                    _write_source_code(t, kind, builder, type_constructors)
-                    builder.current_indent = 0
+                _write_source_code(t, kind, builder, type_constructors)
+                builder.current_indent = 0
 
             # Write the type definitions generated earlier.
             builder.writeln()
@@ -196,16 +187,9 @@ def _write_class_init(tlobject, kind, type_constructors, builder):
                     crc32(tlobject.result.encode('ascii')))
     builder.writeln()
 
-    slots_args = [f'\'{a.name}\',' for a in tlobject.real_args]
-    if slots_args:
-        builder.writeln('__slots__ = ' + " ".join(slots_args))
-    else:
-        builder.writeln('__slots__ = ()')
-    builder.writeln()
-
-    # Convert the args to string parameters, flags having =None
+    # Convert the args to string parameters, those with flag having =None
     args = ['{}: {}{}'.format(
-        a.name, a.type_hint(), '=None' if a.is_flag or a.can_be_inferred else '')
+        a.name, a.type_hint(), '=None' if a.flag or a.can_be_inferred else '')
         for a in tlobject.real_args
     ]
 
@@ -213,7 +197,7 @@ def _write_class_init(tlobject, kind, type_constructors, builder):
     if not tlobject.real_args:
         return
 
-    if any(a.name in __builtins__ for a in tlobject.real_args):
+    if any(hasattr(__builtins__, a.name) for a in tlobject.real_args):
         builder.writeln('# noinspection PyShadowingBuiltins')
 
     builder.writeln("def __init__({}):", ', '.join(['self'] + args))
@@ -282,7 +266,7 @@ def _write_resolve(tlobject, builder):
                 if not ac:
                     continue
 
-            if arg.is_flag:
+            if arg.flag:
                 builder.writeln('if self.{}:', arg.name)
 
             if arg.is_vector:
@@ -295,7 +279,7 @@ def _write_resolve(tlobject, builder):
                 builder.writeln('self.{} = {}', arg.name,
                               ac.format('self.' + arg.name))
 
-            if arg.is_flag:
+            if arg.flag:
                 builder.end_block()
         builder.end_block()
 
@@ -337,14 +321,14 @@ def _write_to_dict(tlobject, builder):
 
 
 def _write_to_bytes(tlobject, builder):
-    builder.writeln('def __bytes__(self):')
+    builder.writeln('def _bytes(self):')
 
     # Some objects require more than one flag parameter to be set
     # at the same time. In this case, add an assertion.
     repeated_args = defaultdict(list)
     for arg in tlobject.args:
-        if arg.is_flag:
-            repeated_args[arg.flag_index].append(arg)
+        if arg.flag:
+            repeated_args[(arg.flag, arg.flag_index)].append(arg)
 
     for ra in repeated_args.values():
         if len(ra) > 1:
@@ -366,7 +350,7 @@ def _write_to_bytes(tlobject, builder):
     builder.writeln('{},', repr(struct.pack('<I', tlobject.id)))
 
     for arg in tlobject.args:
-        if _write_arg_to_bytes(builder, arg, tlobject.args):
+        if _write_arg_to_bytes(builder, arg, tlobject):
             builder.writeln(',')
 
     builder.current_indent -= 1
@@ -378,7 +362,7 @@ def _write_from_reader(tlobject, builder):
     builder.writeln('@classmethod')
     builder.writeln('def from_reader(cls, reader):')
     for arg in tlobject.args:
-        _write_arg_read_code(builder, arg, tlobject.args, name='_' + arg.name)
+        _write_arg_read_code(builder, arg, tlobject, name='_' + arg.name)
 
     builder.writeln('return cls({})', ', '.join(
         '{0}=_{0}'.format(a.name) for a in tlobject.real_args))
@@ -412,13 +396,12 @@ def _write_read_result(tlobject, builder):
                     'for _ in range(reader.read_int())]', m.group(1))
 
 
-def _write_arg_to_bytes(builder, arg, args, name=None):
+def _write_arg_to_bytes(builder, arg, tlobject, name=None):
     """
     Writes the .__bytes__() code for the given argument
     :param builder: The source code builder
     :param arg: The argument to write
-    :param args: All the other arguments in TLObject same __bytes__.
-                 This is required to determine the flags value
+    :param tlobject: The parent TLObject
     :param name: The name of the argument. Defaults to "self.argname"
                  This argument is an option because it's required when
                  writing Vectors<>
@@ -433,7 +416,7 @@ def _write_arg_to_bytes(builder, arg, args, name=None):
     # if it's not a True type.
     # True types are not actually sent, but instead only used to
     # determine the flags.
-    if arg.is_flag:
+    if arg.flag:
         if arg.type == 'true':
             return  # Exit, since True type is never written
         elif arg.is_vector:
@@ -442,6 +425,9 @@ def _write_arg_to_bytes(builder, arg, args, name=None):
             # should NOT be sent either!
             builder.write("b'' if {0} is None or {0} is False "
                           "else b''.join((", name)
+        elif 'Bool' == arg.type:
+            # `False` is a valid value for this type, so only check for `None`.
+            builder.write("b'' if {0} is None else (", name)
         else:
             builder.write("b'' if {0} is None or {0} is False "
                           "else (", name)
@@ -458,33 +444,43 @@ def _write_arg_to_bytes(builder, arg, args, name=None):
         builder.write("b''.join(")
 
         # Temporary disable .is_vector, not to enter this if again
-        # Also disable .is_flag since it's not needed per element
-        old_flag = arg.is_flag
-        arg.is_vector = arg.is_flag = False
-        _write_arg_to_bytes(builder, arg, args, name='x')
+        # Also disable .flag since it's not needed per element
+        old_flag, arg.flag = arg.flag, None
+        arg.is_vector = False
+        _write_arg_to_bytes(builder, arg, tlobject, name='x')
         arg.is_vector = True
-        arg.is_flag = old_flag
+        arg.flag = old_flag
 
         builder.write(' for x in {})', name)
 
     elif arg.flag_indicator:
         # Calculate the flags with those items which are not None
-        if not any(f.is_flag for f in args):
+        if not any(f.flag for f in tlobject.args):
             # There's a flag indicator, but no flag arguments so it's 0
             builder.write(r"b'\0\0\0\0'")
         else:
+            def fmt_flag_arg(a):
+                if a.type == 'Bool':
+                    fmt = '(0 if {0} is None else {1})'
+                else:
+                    fmt = '(0 if {0} is None or {0} is False else {1})'
+                return fmt.format('self.{}'.format(a.name), 1 << a.flag_index)
+
             builder.write("struct.pack('<I', ")
             builder.write(
-                ' | '.join('(0 if {0} is None or {0} is False else {1})'
-                           .format('self.{}'.format(flag.name),
-                                   1 << flag.flag_index)
-                           for flag in args if flag.is_flag)
+                ' | '.join(fmt_flag_arg(a) for a in tlobject.args if a.flag == arg.name)
             )
             builder.write(')')
 
     elif 'int' == arg.type:
-        # struct.pack is around 4 times faster than int.to_bytes
-        builder.write("struct.pack('<i', {})", name)
+        # User IDs are becoming larger than 2³¹ - 1, which would translate
+        # into reading a negative ID, which we would treat as a chat. So
+        # special case them to read unsigned. See https://t.me/BotNews/57.
+        if arg.name == 'user_id' or (arg.name == 'id' and tlobject.result == 'User'):
+            builder.write("struct.pack('<I', {})", name)
+        else:
+            # struct.pack is around 4 times faster than int.to_bytes
+            builder.write("struct.pack('<i', {})", name)
 
     elif 'long' == arg.type:
         builder.write("struct.pack('<q', {})", name)
@@ -509,17 +505,14 @@ def _write_arg_to_bytes(builder, arg, args, name=None):
         pass  # These are actually NOT written! Only used for flags
 
     elif 'bytes' == arg.type:
-        if name in ['x', 'self.data', 'self.srp_B', 'self.secret', 'self.waveform', 'self.new_password_hash', 'self.option']:
-            builder.write('self.serialize_bytes({})', name)
-        else:
-            builder.write('*self.serialize_bytes_tuple({})', name)
+        builder.write('self.serialize_bytes({})', name)
 
     elif 'date' == arg.type:  # Custom format
         builder.write('self.serialize_datetime({})', name)
 
     else:
         # Else it may be a custom type
-        builder.write('bytes({})', name)
+        builder.write('{}._bytes()', name)
 
         # If the type is not boxed (i.e. starts with lowercase) we should
         # not serialize the constructor ID (so remove its first 4 bytes).
@@ -527,7 +520,7 @@ def _write_arg_to_bytes(builder, arg, args, name=None):
         if not boxed:
             builder.write('[4:]')
 
-    if arg.is_flag:
+    if arg.flag:
         builder.write(')')
         if arg.is_vector:
             builder.write(')')  # We were using a tuple
@@ -535,15 +528,14 @@ def _write_arg_to_bytes(builder, arg, args, name=None):
     return True  # Something was written
 
 
-def _write_arg_read_code(builder, arg, args, name):
+def _write_arg_read_code(builder, arg, tlobject, name):
     """
     Writes the read code for the given argument, setting the
     arg.name variable to its read value.
 
     :param builder: The source code builder
     :param arg: The argument to write
-    :param args: All the other arguments in TLObject same on_send.
-                 This is required to determine the flags value
+    :param tlobject: The parent TLObject
     :param name: The name of the argument. Defaults to "self.argname"
                  This argument is an option because it's required when
                  writing Vectors<>
@@ -553,20 +545,19 @@ def _write_arg_read_code(builder, arg, args, name):
         return  # Do nothing, this only specifies a later type
 
     # The argument may be a flag, only write that flag was given!
-    was_flag = False
-    if arg.is_flag:
+    old_flag = None
+    if arg.flag:
         # Treat 'true' flags as a special case, since they're true if
         # they're set, and nothing else needs to actually be read.
         if 'true' == arg.type:
-            builder.writeln('{} = bool(flags & {})',
-                            name, 1 << arg.flag_index)
+            builder.writeln('{} = bool({} & {})',
+                            name, arg.flag, 1 << arg.flag_index)
             return
 
-        was_flag = True
-        builder.writeln('if flags & {}:', 1 << arg.flag_index)
-        # Temporary disable .is_flag not to enter this if
+        builder.writeln('if {} & {}:', arg.flag, 1 << arg.flag_index)
+        # Temporary disable .flag not to enter this if
         # again when calling the method recursively
-        arg.is_flag = False
+        old_flag, arg.flag = arg.flag, None
 
     if arg.is_vector:
         if arg.use_vector_id:
@@ -577,17 +568,23 @@ def _write_arg_read_code(builder, arg, args, name):
         builder.writeln('for _ in range(reader.read_int()):')
         # Temporary disable .is_vector, not to enter this if again
         arg.is_vector = False
-        _write_arg_read_code(builder, arg, args, name='_x')
+        _write_arg_read_code(builder, arg, tlobject, name='_x')
         builder.writeln('{}.append(_x)', name)
         arg.is_vector = True
 
     elif arg.flag_indicator:
         # Read the flags, which will indicate what items we should read next
-        builder.writeln('flags = reader.read_int()')
+        builder.writeln('{} = reader.read_int()', arg.name)
         builder.writeln()
 
     elif 'int' == arg.type:
-        builder.writeln('{} = reader.read_int()', name)
+        # User IDs are becoming larger than 2³¹ - 1, which would translate
+        # into reading a negative ID, which we would treat as a chat. So
+        # special case them to read unsigned. See https://t.me/BotNews/57.
+        if arg.name == 'user_id' or (arg.name == 'id' and tlobject.result == 'User'):
+            builder.writeln('{} = reader.read_int(signed=False)', name)
+        else:
+            builder.writeln('{} = reader.read_int()', name)
 
     elif 'long' == arg.type:
         builder.writeln('{} = reader.read_long()', name)
@@ -645,50 +642,20 @@ def _write_arg_read_code(builder, arg, args, name):
     if arg.is_vector:
         builder.end_block()
 
-    if was_flag:
+    if old_flag:
         builder.current_indent -= 1
         builder.writeln('else:')
         builder.writeln('{} = None', name)
         builder.current_indent -= 1
-        # Restore .is_flag
-        arg.is_flag = True
-
-
-def _write_patched(out_dir, namespace_tlobjects):
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for ns, tlobjects in namespace_tlobjects.items():
-        file = out_dir / '{}.py'.format(ns or '__init__')
-        with file.open('w') as f, SourceBuilder(f) as builder:
-            builder.writeln(AUTO_GEN_NOTICE)
-
-            builder.writeln('import struct')
-            builder.writeln('from .. import TLObject, types, custom')
-            builder.writeln()
-            for t in tlobjects:
-                builder.writeln('class {}(custom.{}):', t.class_name,
-                                PATCHED_TYPES[t.fullname])
-
-                builder.writeln('CONSTRUCTOR_ID = {:#x}', t.id)
-                builder.writeln('SUBCLASS_OF_ID = {:#x}',
-                                crc32(t.result.encode('ascii')))
-
-                _write_to_dict(t, builder)
-                _write_to_bytes(t, builder)
-                _write_from_reader(t, builder)
-                builder.current_indent = 0
-                builder.writeln()
-                builder.writeln(
-                    'types.{1}{0} = {0}', t.class_name,
-                    '{}.'.format(t.namespace) if t.namespace else ''
-                )
-                builder.writeln()
+        # Restore .flag
+        arg.flag = old_flag
 
 
 def _write_all_tlobjects(tlobjects, layer, builder):
     builder.writeln(AUTO_GEN_NOTICE)
     builder.writeln()
 
-    builder.writeln('from . import types, functions, patched')
+    builder.writeln('from . import types, functions')
     builder.writeln()
 
     # Create a constant variable to indicate which layer this is
@@ -700,13 +667,10 @@ def _write_all_tlobjects(tlobjects, layer, builder):
     builder.current_indent += 1
 
     # Fill the dictionary (0x1a2b3c4f: tl.full.type.path.Class)
+    tlobjects.sort(key=lambda x: x.name)
     for tlobject in tlobjects:
         builder.write('{:#010x}: ', tlobject.id)
-        # TODO Probably circular dependency
-        if tlobject.fullname in PATCHED_TYPES:
-            builder.write('patched')
-        else:
-            builder.write('functions' if tlobject.is_function else 'types')
+        builder.write('functions' if tlobject.is_function else 'types')
 
         if tlobject.namespace:
             builder.write('.{}', tlobject.namespace)
@@ -721,7 +685,6 @@ def generate_tlobjects(tlobjects, layer, import_depth, output_dir):
     # Group everything by {namespace: [tlobjects]} to generate __init__.py
     namespace_functions = defaultdict(list)
     namespace_types = defaultdict(list)
-    namespace_patched = defaultdict(list)
 
     # Group {type: [constructors]} to generate the documentation
     type_constructors = defaultdict(list)
@@ -731,14 +694,11 @@ def generate_tlobjects(tlobjects, layer, import_depth, output_dir):
         else:
             namespace_types[tlobject.namespace].append(tlobject)
             type_constructors[tlobject.result].append(tlobject)
-            if tlobject.fullname in PATCHED_TYPES:
-                namespace_patched[tlobject.namespace].append(tlobject)
 
     _write_modules(output_dir / 'functions', import_depth, 'TLRequest',
                    namespace_functions, type_constructors)
     _write_modules(output_dir / 'types', import_depth, 'TLObject',
                    namespace_types, type_constructors)
-    _write_patched(output_dir / 'patched', namespace_patched)
 
     filename = output_dir / 'alltlobjects.py'
     with filename.open('w') as file:
@@ -747,7 +707,7 @@ def generate_tlobjects(tlobjects, layer, import_depth, output_dir):
 
 
 def clean_tlobjects(output_dir):
-    for d in ('functions', 'types', 'patched'):
+    for d in ('functions', 'types'):
         d = output_dir / d
         if d.is_dir():
             shutil.rmtree(str(d))

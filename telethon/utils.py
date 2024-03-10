@@ -4,7 +4,6 @@ to convert between an entity like a User, Chat, etc. into its Input version)
 """
 import base64
 import binascii
-import imghdr
 import inspect
 import io
 import itertools
@@ -20,7 +19,7 @@ from mimetypes import guess_extension
 from types import GeneratorType
 
 from .extensions import markdown, html
-from .helpers import add_surrogate, del_surrogate
+from .helpers import add_surrogate, del_surrogate, strip_text
 from .tl import types
 
 try:
@@ -51,21 +50,17 @@ mimetypes.add_type('audio/aac', '.aac')
 mimetypes.add_type('audio/ogg', '.ogg')
 mimetypes.add_type('audio/flac', '.flac')
 
+mimetypes.add_type('application/x-tgsticker', '.tgs')
+
 USERNAME_RE = re.compile(
-    r'@|(?:https?://)?(?:www\.)?(?:telegram\.(?:me|dog)|t\.me)/(@|joinchat/)?'
+    r'@|(?:https?://)?(?:www\.)?(?:telegram\.(?:me|dog)|t\.me)/(@|\+|joinchat/)?'
 )
 TG_JOIN_RE = re.compile(
     r'tg://(join)\?invite='
 )
 
-# The only shorter-than-five-characters usernames are those used for some
-# special, very well known bots. This list may be incomplete though:
-#    "[...] @gif, @vid, @pic, @bing, @wiki, @imdb and @bold [...]"
-#
-# See https://telegram.org/blog/inline-bots#how-does-it-work
 VALID_USERNAME_RE = re.compile(
-    r'^([a-z]((?!__)[\w\d]){3,30}[a-z\d]'
-    r'|gif|vid|pic|bing|wiki|imdb|bold|vote|like|coub)$',
+    r'^[a-z](?:(?!__)\w){1,30}[a-z\d]$',
     re.IGNORECASE
 )
 
@@ -100,7 +95,7 @@ def get_display_name(entity):
         else:
             return ''
 
-    elif isinstance(entity, (types.Chat, types.Channel)):
+    elif isinstance(entity, (types.Chat, types.ChatForbidden, types.Channel)):
         return entity.title
 
     return ''
@@ -427,7 +422,8 @@ def get_input_geo(geo):
 def get_input_media(
         media, *,
         is_photo=False, attributes=None, force_document=False,
-        voice_note=False, video_note=False, supports_streaming=False
+        voice_note=False, video_note=False, supports_streaming=False,
+        ttl=None
 ):
     """
     Similar to :meth:`get_input_peer`, but for media.
@@ -440,37 +436,39 @@ def get_input_media(
         if media.SUBCLASS_OF_ID == 0xfaf846f4:  # crc32(b'InputMedia')
             return media
         elif media.SUBCLASS_OF_ID == 0x846363e0:  # crc32(b'InputPhoto')
-            return types.InputMediaPhoto(media)
+            return types.InputMediaPhoto(media, ttl_seconds=ttl)
         elif media.SUBCLASS_OF_ID == 0xf33fdb68:  # crc32(b'InputDocument')
-            return types.InputMediaDocument(media)
+            return types.InputMediaDocument(media, ttl_seconds=ttl)
     except AttributeError:
         _raise_cast_fail(media, 'InputMedia')
 
     if isinstance(media, types.MessageMediaPhoto):
         return types.InputMediaPhoto(
             id=get_input_photo(media.photo),
-            ttl_seconds=media.ttl_seconds
+            ttl_seconds=ttl or media.ttl_seconds
         )
 
     if isinstance(media, (types.Photo, types.photos.Photo, types.PhotoEmpty)):
         return types.InputMediaPhoto(
-            id=get_input_photo(media)
+            id=get_input_photo(media),
+            ttl_seconds=ttl
         )
 
     if isinstance(media, types.MessageMediaDocument):
         return types.InputMediaDocument(
             id=get_input_document(media.document),
-            ttl_seconds=media.ttl_seconds
+            ttl_seconds=ttl or media.ttl_seconds
         )
 
     if isinstance(media, (types.Document, types.DocumentEmpty)):
         return types.InputMediaDocument(
-            id=get_input_document(media)
+            id=get_input_document(media),
+            ttl_seconds=ttl
         )
 
     if isinstance(media, (types.InputFile, types.InputFileBig)):
         if is_photo:
-            return types.InputMediaUploadedPhoto(file=media)
+            return types.InputMediaUploadedPhoto(file=media, ttl_seconds=ttl)
         else:
             attrs, mime = get_attributes(
                 media,
@@ -481,7 +479,8 @@ def get_input_media(
                 supports_streaming=supports_streaming
             )
             return types.InputMediaUploadedDocument(
-                file=media, mime_type=mime, attributes=attrs)
+                file=media, mime_type=mime, attributes=attrs, force_file=force_document,
+                ttl_seconds=ttl)
 
     if isinstance(media, types.MessageMediaGame):
         return types.InputMediaGame(id=types.InputGameID(
@@ -510,15 +509,38 @@ def get_input_media(
             venue_type=''
         )
 
+    if isinstance(media, types.MessageMediaDice):
+        return types.InputMediaDice(media.emoticon)
+
     if isinstance(media, (
             types.MessageMediaEmpty, types.MessageMediaUnsupported,
             types.ChatPhotoEmpty, types.UserProfilePhotoEmpty,
-            types.ChatPhoto, types.UserProfilePhoto,
-            types.FileLocationToBeDeprecated)):
+            types.ChatPhoto, types.UserProfilePhoto)):
         return types.InputMediaEmpty()
 
     if isinstance(media, types.Message):
-        return get_input_media(media.media, is_photo=is_photo)
+        return get_input_media(media.media, is_photo=is_photo, ttl=ttl)
+
+    if isinstance(media, types.MessageMediaPoll):
+        if media.poll.quiz:
+            if not media.results.results:
+                # A quiz has correct answers, which we don't know until answered.
+                # If the quiz hasn't been answered we can't reconstruct it properly.
+                raise TypeError('Cannot cast unanswered quiz to any kind of InputMedia.')
+
+            correct_answers = [r.option for r in media.results.results if r.correct]
+        else:
+            correct_answers = None
+
+        return types.InputMediaPoll(
+            poll=media.poll,
+            correct_answers=correct_answers,
+            solution=media.results.solution,
+            solution_entities=media.results.solution_entities,
+        )
+
+    if isinstance(media, types.Poll):
+        return types.InputMediaPoll(media)
 
     _raise_cast_fail(media, 'InputMedia')
 
@@ -538,16 +560,30 @@ def get_input_message(message):
     _raise_cast_fail(message, 'InputMedia')
 
 
+def get_input_group_call(call):
+    """Similar to :meth:`get_input_peer`, but for input calls."""
+    try:
+        if call.SUBCLASS_OF_ID == 0x58611ab1:  # crc32(b'InputGroupCall')
+            return call
+        elif call.SUBCLASS_OF_ID == 0x20b4f320:  # crc32(b'GroupCall')
+            return types.InputGroupCall(id=call.id, access_hash=call.access_hash)
+    except AttributeError:
+        _raise_cast_fail(call, 'InputGroupCall')
+
+
 def _get_entity_pair(entity_id, entities, cache,
                      get_input_peer=get_input_peer):
     """
     Returns ``(entity, input_entity)`` for the given entity ID.
     """
+    if not entity_id:
+        return None, None
+
     entity = entities.get(entity_id)
     try:
-        input_entity = cache[entity_id]
-    except KeyError:
-        # KeyError is unlikely, so another TypeError won't hurt
+        input_entity = cache.get(resolve_id(entity_id)[0])._as_input_peer()
+    except AttributeError:
+        # AttributeError is unlikely, so another TypeError won't hurt
         try:
             input_entity = get_input_peer(entity)
         except TypeError:
@@ -575,21 +611,59 @@ def get_message_id(message):
 
 
 def _get_metadata(file):
-    # `hachoir` only deals with paths to in-disk files, while
-    # `_get_extension` supports a few other things. The parser
-    # may also fail in any case and we don't want to crash if
+    if not hachoir:
+        return
+
+    stream = None
+    close_stream = True
+    seekable = True
+
+    # The parser may fail and we don't want to crash if
     # the extraction process fails.
-    if hachoir and isinstance(file, str) and os.path.isfile(file):
-        try:
-            with hachoir.parser.createParser(file) as parser:
-                return hachoir.metadata.extractMetadata(parser)
-        except Exception as e:
-            _log.warning('Failed to analyze %s: %s %s', file, e.__class__, e)
+    try:
+        # Note: aiofiles are intentionally left out for simplicity.
+        # `helpers._FileStream` is async only for simplicity too, so can't
+        # reuse it here.
+        if isinstance(file, str):
+            stream = open(file, 'rb')
+        elif isinstance(file, bytes):
+            stream = io.BytesIO(file)
+        else:
+            stream = file
+            close_stream = False
+            if getattr(file, 'seekable', None):
+                seekable = file.seekable()
+            else:
+                seekable = False
+
+        if not seekable:
+            return None
+
+        pos = stream.tell()
+        filename = getattr(file, 'name', '')
+
+        parser = hachoir.parser.guess.guessParser(hachoir.stream.InputIOStream(
+            stream,
+            source='file:' + filename,
+            tags=[],
+            filename=filename
+        ))
+
+        return hachoir.metadata.extractMetadata(parser)
+
+    except Exception as e:
+        _log.warning('Failed to analyze %s: %s %s', file, e.__class__, e)
+
+    finally:
+        if stream and close_stream:
+            stream.close()
+        elif stream and seekable:
+            stream.seek(pos)
 
 
 def get_attributes(file, *, attributes=None, mime_type=None,
                    force_document=False, voice_note=False, video_note=False,
-                   supports_streaming=False):
+                   supports_streaming=False, thumb=None):
     """
     Get a list of attributes for the given file and
     the mime type as a tuple ([attribute], mime_type).
@@ -605,11 +679,18 @@ def get_attributes(file, *, attributes=None, mime_type=None,
     if is_audio(file):
         m = _get_metadata(file)
         if m:
+            if m.has('author'):
+                performer = m.get('author')
+            elif m.has('artist'):
+                performer = m.get('artist')
+            else:
+                performer = None
+
             attr_dict[types.DocumentAttributeAudio] = \
                 types.DocumentAttributeAudio(
                     voice=voice_note,
                     title=m.get('title') if m.has('title') else None,
-                    performer=m.get('author') if m.has('author') else None,
+                    performer=performer,
                     duration=int(m.get('duration').seconds
                                  if m.has('duration') else 0)
                 )
@@ -619,12 +700,24 @@ def get_attributes(file, *, attributes=None, mime_type=None,
         if m:
             doc = types.DocumentAttributeVideo(
                 round_message=video_note,
-                w=m.get('width') if m.has('width') else 0,
-                h=m.get('height') if m.has('height') else 0,
+                w=m.get('width') if m.has('width') else 1,
+                h=m.get('height') if m.has('height') else 1,
                 duration=int(m.get('duration').seconds
-                             if m.has('duration') else 0),
+                             if m.has('duration') else 1),
                 supports_streaming=supports_streaming
             )
+        elif thumb:
+            t_m = _get_metadata(thumb)
+            width = 1
+            height = 1
+            if t_m and t_m.has("width"):
+                width = t_m.get("width")
+            if t_m and t_m.has("height"):
+                height = t_m.get("height")
+
+            doc = types.DocumentAttributeVideo(
+                0, width, height, round_message=video_note,
+                supports_streaming=supports_streaming)
         else:
             doc = types.DocumentAttributeVideo(
                 0, 1, 1, round_message=video_note,
@@ -663,7 +756,10 @@ def sanitize_parse_mode(mode):
     if not mode:
         return None
 
-    if callable(mode):
+    if (all(hasattr(mode, x) for x in ('parse', 'unparse'))
+          and all(callable(x) for x in (mode.parse, mode.unparse))):
+        return mode
+    elif callable(mode):
         class CustomMode:
             @staticmethod
             def unparse(text, entities):
@@ -671,9 +767,6 @@ def sanitize_parse_mode(mode):
 
         CustomMode.parse = mode
         return CustomMode
-    elif (all(hasattr(mode, x) for x in ('parse', 'unparse'))
-          and all(callable(x) for x in (mode.parse, mode.unparse))):
-        return mode
     elif isinstance(mode, str):
         try:
             return {
@@ -729,9 +822,6 @@ def _get_file_info(location):
             thumb_size=location.sizes[-1].type
         ), _photo_size_byte_count(location.sizes[-1]))
 
-    if isinstance(location, types.FileLocationToBeDeprecated):
-        raise TypeError('Unavailable location cannot be used as input')
-
     _raise_cast_fail(location, 'InputFileLocation')
 
 
@@ -744,12 +834,6 @@ def _get_extension(file):
         return os.path.splitext(file)[-1]
     elif isinstance(file, pathlib.Path):
         return file.suffix
-    elif isinstance(file, bytes):
-        kind = imghdr.what(io.BytesIO(file))
-        return ('.' + kind) if kind else ''
-    elif isinstance(file, io.IOBase) and not isinstance(file, io.TextIOBase) and file.seekable():
-        kind = imghdr.what(file)
-        return ('.' + kind) if kind is not None else ''
     elif getattr(file, 'name', None):
         # Note: ``file.name`` works for :tl:`InputFile` and some `IOBase`
         return _get_extension(file.name)
@@ -777,15 +861,31 @@ def is_gif(file):
 
 
 def is_audio(file):
-    """Returns `True` if the file extension looks like an audio file."""
-    file = 'a' + _get_extension(file)
-    return (mimetypes.guess_type(file)[0] or '').startswith('audio/')
+    """Returns `True` if the file has an audio mime type."""
+    ext = _get_extension(file)
+    if not ext:
+        metadata = _get_metadata(file)
+        if metadata and metadata.has('mime_type'):
+            return metadata.get('mime_type').startswith('audio/')
+        else:
+            return False
+    else:
+        file = 'a' + ext
+        return (mimetypes.guess_type(file)[0] or '').startswith('audio/')
 
 
 def is_video(file):
-    """Returns `True` if the file extension looks like a video file."""
-    file = 'a' + _get_extension(file)
-    return (mimetypes.guess_type(file)[0] or '').startswith('video/')
+    """Returns `True` if the file has a video mime type."""
+    ext = _get_extension(file)
+    if not ext:
+        metadata = _get_metadata(file)
+        if metadata and metadata.has('mime_type'):
+            return metadata.get('mime_type').startswith('video/')
+        else:
+            return False
+    else:
+        file = 'a' + ext
+        return (mimetypes.guess_type(file)[0] or '').startswith('video/')
 
 
 def is_list_like(obj):
@@ -866,6 +966,10 @@ def get_peer(peer):
             return peer.peer
         elif isinstance(peer, types.ChannelFull):
             return types.PeerChannel(peer.id)
+        elif isinstance(peer, types.UserEmpty):
+            return types.PeerUser(peer.id)
+        elif isinstance(peer, types.ChatEmpty):
+            return types.PeerChat(peer.id)
 
         if peer.SUBCLASS_OF_ID in (0x7d7c6f86, 0xd9c7fc18):
             # ChatParticipant, ChannelParticipant
@@ -889,7 +993,7 @@ def get_peer_id(peer, add_mark=True):
 
     This "mark" comes from the "bot api" format, and with it the peer type
     can be identified back. User ID is left unmodified, chat ID is negated,
-    and channel ID is prefixed with -100:
+    and channel ID is "prefixed" with -100:
 
     * ``user_id``
     * ``-chat_id``
@@ -915,26 +1019,20 @@ def get_peer_id(peer, add_mark=True):
         return peer.user_id
     elif isinstance(peer, types.PeerChat):
         # Check in case the user mixed things up to avoid blowing up
-        if not (0 < peer.chat_id <= 0x7fffffff):
+        if not (0 < peer.chat_id <= 9999999999):
             peer.chat_id = resolve_id(peer.chat_id)[0]
 
         return -peer.chat_id if add_mark else peer.chat_id
     else:  # if isinstance(peer, types.PeerChannel):
         # Check in case the user mixed things up to avoid blowing up
-        if not (0 < peer.channel_id <= 0x7fffffff):
+        if not (0 < peer.channel_id <= 9999999999):
             peer.channel_id = resolve_id(peer.channel_id)[0]
 
         if not add_mark:
             return peer.channel_id
 
-        # Concat -100 through math tricks, .to_supergroup() on
-        # Madeline IDs will be strictly positive -> log works.
-        try:
-            return -(peer.channel_id + pow(
-                10, math.floor(math.log10(peer.channel_id) + 3)))
-        except ValueError:
-            raise TypeError('Cannot get marked ID of a channel '
-                            'unless its ID is strictly positive') from None
+        # Growing backwards from -100_0000_000_000 indicates it's a channel
+        return -(1000000000000 + peer.channel_id)
 
 
 def resolve_id(marked_id):
@@ -942,15 +1040,12 @@ def resolve_id(marked_id):
     if marked_id >= 0:
         return marked_id, types.PeerUser
 
-    # There have been report of chat IDs being 10000xyz, which means their
-    # marked version is -10000xyz, which in turn looks like a channel but
-    # it becomes 00xyz (= xyz). Hence, we must assert that there are only
-    # two zeroes.
-    m = re.match(r'-100([^0]\d*)', str(marked_id))
-    if m:
-        return int(m.group(1)), types.PeerChannel
-
-    return -marked_id, types.PeerChat
+    marked_id = -marked_id
+    if marked_id > 1000000000000:
+        marked_id -= 1000000000000
+        return marked_id, types.PeerChannel
+    else:
+        return marked_id, types.PeerChat
 
 
 def _rle_decode(data):
@@ -990,7 +1085,7 @@ def _rle_encode(string):
 
 def _decode_telegram_base64(string):
     """
-    Decodes an url-safe base64-encoded string into its bytes
+    Decodes a url-safe base64-encoded string into its bytes
     by first adding the stripped necessary padding characters.
 
     This is the way Telegram shares binary data as strings,
@@ -1085,15 +1180,20 @@ def resolve_bot_file_id(file_id):
             attributes=attributes,
             file_reference=b''
         )
-    elif (version == 2 and len(data) == 44) or (version == 4 and len(data) == 49):
+    elif (version == 2 and len(data) == 44) or (version == 4 and len(data) in (49, 77)):
         if version == 2:
             (file_type, dc_id, media_id, access_hash,
                 volume_id, secret, local_id) = struct.unpack('<iiqqqqi', data)
-        # elif version == 4:
-        else:
+        # else version == 4:
+        elif len(data) == 49:
             # TODO Figure out what the extra five bytes mean
             (file_type, dc_id, media_id, access_hash,
                 volume_id, secret, local_id, _) = struct.unpack('<iiqqqqi5s', data)
+        elif len(data) == 77:
+            # See #1613.
+            (file_type, dc_id, _, media_id, access_hash, volume_id, _, local_id, _) = struct.unpack('<ii28sqqq12sib', data)
+        else:
+            return None
 
         if not (1 <= dc_id <= 5):
             return None
@@ -1107,10 +1207,6 @@ def resolve_bot_file_id(file_id):
             date=None,
             sizes=[types.PhotoSize(
                 type=photo_size,
-                location=types.FileLocationToBeDeprecated(
-                    volume_id=volume_id,
-                    local_id=local_id
-                ),
                 w=0,
                 h=0,
                 size=0
@@ -1173,14 +1269,13 @@ def resolve_invite_link(link):
     Resolves the given invite link. Returns a tuple of
     ``(link creator user id, global chat id, random int)``.
 
-    Note that for broadcast channels, the link creator
-    user ID will be zero to protect their identity.
-    Normal chats and megagroup channels will have such ID.
+    Note that for broadcast channels or with the newest link format, the link
+    creator user ID will be zero to protect their identity. Normal chats and
+    megagroup channels will have such ID.
 
-    Note that the chat ID may not be accurate for chats
-    with a link that were upgraded to megagroup, since
-    the link can remain the same, but the chat ID will
-    be correct once a new link is generated.
+    Note that the chat ID may not be accurate for chats with a link that were
+    upgraded to megagroup, since the link can remain the same, but the chat
+    ID will be correct once a new link is generated.
     """
     link_hash, is_link = parse_username(link)
     if not is_link:
@@ -1189,15 +1284,21 @@ def resolve_invite_link(link):
 
     # Little known fact, but invite links with a
     # hex-string of bytes instead of base64 also works.
-    if re.match(r'[a-fA-F\d]{32}', link_hash):
+    if re.match(r'[a-fA-F\d]+', link_hash) and len(link_hash) in (24, 32):
         payload = bytes.fromhex(link_hash)
     else:
         payload = _decode_telegram_base64(link_hash)
 
     try:
-        return struct.unpack('>LLQ', payload)
+        if len(payload) == 12:
+            return (0, *struct.unpack('>LQ', payload))
+        elif len(payload) == 16:
+            return struct.unpack('>LLQ', payload)
+        else:
+            pass
     except (struct.error, TypeError):
-        return None, None, None
+        pass
+    return None, None, None
 
 
 def resolve_inline_message_id(inline_msg_id):
@@ -1230,10 +1331,7 @@ def get_appropriated_part_size(file_size):
         return 128
     if file_size <= 786432000:  # 750MB
         return 256
-    if file_size <= 2097152000:  # 2000MB
-        return 512
-
-    raise ValueError('File size too large')
+    return 512
 
 
 def encode_waveform(waveform):
@@ -1302,6 +1400,101 @@ def decode_waveform(waveform):
     return bytes(result)
 
 
+def split_text(text, entities, *, limit=4096, max_entities=100, split_at=(r'\n', r'\s', '.')):
+    """
+    Split a message text and entities into multiple messages, each with their
+    own set of entities. This allows sending a very large message as multiple
+    messages while respecting the formatting.
+
+    Arguments
+        text (`str`):
+            The message text.
+
+        entities (List[:tl:`MessageEntity`])
+            The formatting entities.
+
+        limit (`int`):
+            The maximum message length of each individual message.
+
+        max_entities (`int`):
+            The maximum amount of entities that will be present in each
+            individual message.
+
+        split_at (Tuplel[`str`]):
+            The list of regular expressions that will determine where to split
+            the text. By default, a newline is searched. If no newline is
+            present, a space is searched. If no space is found, the split will
+            be made at any character.
+
+            The last expression should always match a character, or else the
+            text will stop being splitted and the resulting text may be larger
+            than the limit.
+
+    Yields
+        Pairs of ``(str, entities)`` with the split message.
+
+    Example
+        .. code-block:: python
+
+            from telethon import utils
+            from telethon.extensions import markdown
+
+            very_long_markdown_text = "..."
+            text, entities = markdown.parse(very_long_markdown_text)
+
+            for text, entities in utils.split_text(text, entities):
+                await client.send_message(chat, text, formatting_entities=entities)
+    """
+    # TODO add test cases (multiple entities beyond cutoff, at cutoff, splitting at emoji)
+    # TODO try to optimize this a bit more? (avoid new_ent, smarter update method)
+    def update(ent, **updates):
+        kwargs = ent.to_dict()
+        del kwargs['_']
+        kwargs.update(updates)
+        return ent.__class__(**kwargs)
+
+    text = add_surrogate(text)
+    split_at = tuple(map(re.compile, split_at))
+
+    while True:
+        if len(entities) > max_entities:
+            last_ent = entities[max_entities - 1]
+            cur_limit = min(limit, last_ent.offset + last_ent.length)
+        else:
+            cur_limit = limit
+
+        if len(text) <= cur_limit:
+            break
+
+        for split in split_at:
+            for i in reversed(range(cur_limit)):
+                m = split.match(text, pos=i)
+                if m:
+                    cur_text, new_text = text[:m.end()], text[m.end():]
+                    cur_ent, new_ent = [], []
+                    for ent in entities:
+                        if ent.offset < m.end():
+                            if ent.offset + ent.length > m.end():
+                                cur_ent.append(update(ent, length=m.end() - ent.offset))
+                                new_ent.append(update(ent, offset=0, length=ent.offset + ent.length - m.end()))
+                            else:
+                                cur_ent.append(ent)
+                        else:
+                            new_ent.append(update(ent, offset=ent.offset - m.end()))
+
+                    yield del_surrogate(cur_text), cur_ent
+                    text, entities = new_text, new_ent
+                    break
+            else:
+                continue
+            break
+        else:
+            # Can't find where to split, just return the remaining text and entities
+            break
+
+    yield del_surrogate(text), entities
+
+
 class AsyncClassWrapper:
     def __init__(self, wrapped):
         self.wrapped = wrapped
@@ -1347,5 +1540,7 @@ def _photo_size_byte_count(size):
         return len(size.bytes)
     elif isinstance(size, types.PhotoSizeEmpty):
         return 0
+    elif isinstance(size, types.PhotoSizeProgressive):
+        return max(size.sizes)
     else:
         return None

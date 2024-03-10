@@ -1,16 +1,17 @@
-import abc
+from typing import Optional, List, TYPE_CHECKING
+from datetime import datetime
 from .chatgetter import ChatGetter
 from .sendergetter import SenderGetter
 from .messagebutton import MessageButton
 from .forward import Forward
 from .file import File
-from .. import TLObject, types, functions
+from .. import TLObject, types, functions, alltlobjects
 from ... import utils, errors
 
 
 # TODO Figure out a way to have the code generator error on missing fields
 # Maybe parsing the init function alone if that's possible.
-class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
+class Message(ChatGetter, SenderGetter, TLObject):
     """
     This custom class aggregates both :tl:`Message` and
     :tl:`MessageService` to ease accessing their members.
@@ -21,10 +22,6 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
     have access to all their sender and chat properties and methods.
 
     Members:
-        id (`int`):
-            The ID of this message. This field is *always* present.
-            Any other member is optional and may be `None`.
-
         out (`bool`):
             Whether the message is outgoing (i.e. you sent it from
             another session) or incoming (i.e. someone else sent it).
@@ -44,7 +41,6 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
             Whether you have read the media in this message
             or not, e.g. listened to the voice note media.
 
-
         silent (`bool`):
             Whether the message should notify people with sound or not.
             Previously used in channels, but since 9 August 2019, it can
@@ -62,10 +58,43 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         legacy (`bool`):
             Whether this is a legacy message or not.
 
-        to_id (:tl:`Peer`):
+        edit_hide (`bool`):
+            Whether the edited mark of this message is edited
+            should be hidden (e.g. in GUI clients) or shown.
+
+        pinned (`bool`):
+            Whether this message is currently pinned or not.
+
+        noforwards (`bool`):
+            Whether this message can be forwarded or not.
+
+        invert_media (`bool`):
+            Whether the media in this message should be inverted.
+
+        id (`int`):
+            The ID of this message. This field is *always* present.
+            Any other member is optional and may be `None`.
+
+        from_id (:tl:`Peer`):
+            The peer who sent this message, which is either
+            :tl:`PeerUser`, :tl:`PeerChat` or :tl:`PeerChannel`.
+            This value will be `None` for anonymous messages.
+
+        peer_id (:tl:`Peer`):
             The peer to which this message was sent, which is either
             :tl:`PeerUser`, :tl:`PeerChat` or :tl:`PeerChannel`. This
             will always be present except for empty messages.
+
+        fwd_from (:tl:`MessageFwdHeader`):
+            The original forward header if this message is a forward.
+            You should probably use the `forward` property instead.
+
+        via_bot_id (`int`):
+            The ID of the bot used to send this message
+            through its inline mode (e.g. "via @like").
+
+        reply_to (:tl:`MessageReplyHeader`):
+            The original reply header if this message is replying to another.
 
         date (`datetime`):
             The UTC+0 `datetime` object indicating when this message
@@ -76,25 +105,6 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
             The string text of the message for `Message
             <telethon.tl.custom.message.Message>` instances,
             which will be `None` for other types of messages.
-
-        action (:tl:`MessageAction`):
-            The message action object of the message for :tl:`MessageService`
-            instances, which will be `None` for other types of messages.
-
-        from_id (`int`):
-            The ID of the user who sent this message. This will be
-            `None` if the message was sent in a broadcast channel.
-
-        reply_to_msg_id (`int`):
-            The ID to which this message is replying to, if any.
-
-        fwd_from (:tl:`MessageFwdHeader`):
-            The original forward header if this message is a forward.
-            You should probably use the `forward` property instead.
-
-        via_bot_id (`int`):
-            The ID of the bot used to send this message
-            through its inline mode (e.g. "via @like").
 
         media (:tl:`MessageMedia`):
             The media sent with this message if any (such as
@@ -119,12 +129,14 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
             The number of views this message from a broadcast
             channel has. This is also present in forwards.
 
+        forwards (`int`):
+            The number of times this message has been forwarded.
+
+        replies (`int`):
+            The number of times another message has replied to this message.
+
         edit_date (`datetime`):
             The date when this message was last edited.
-
-        edit_hide (`bool`):
-            Whether the edited mark of this message is edited
-            should be hidden (e.g. in GUI clients) or shown.
 
         post_author (`str`):
             The display name of the message sender to
@@ -135,62 +147,73 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
             (photo albums or video albums), all of them will
             have the same value here.
 
+        reactions (:tl:`MessageReactions`)
+            Reactions to this message.
+
         restriction_reason (List[:tl:`RestrictionReason`])
             An optional list of reasons why this message was restricted.
             If the list is `None`, this message has not been restricted.
+
+        ttl_period (`int`):
+            The Time To Live period configured for this message.
+            The message should be erased from wherever it's stored (memory, a
+            local database, etc.) when
+            ``datetime.now() > message.date + timedelta(seconds=message.ttl_period)``.
+
+        action (:tl:`MessageAction`):
+            The message action object of the message for :tl:`MessageService`
+            instances, which will be `None` for other types of messages.
+
+        saved_peer_id (:tl:`Peer`)
     """
 
     # region Initialization
 
     def __init__(
-            # Common to all
-            self, id,
-
-            # Common to Message and MessageService (mandatory)
-            to_id=None, date=None,
-
-            # Common to Message and MessageService (flags)
-            out=None, mentioned=None, media_unread=None, silent=None,
-            post=None, from_id=None, reply_to_msg_id=None,
-
-            # For Message (mandatory)
-            message=None,
-
-            # For Message (flags)
-            fwd_from=None, via_bot_id=None, media=None, reply_markup=None,
-            entities=None, views=None, edit_date=None, post_author=None,
-            grouped_id=None, from_scheduled=None, legacy=None,
-            edit_hide=None, restriction_reason=None,
-
-            # For MessageAction (mandatory)
-            action=None):
-        # Common properties to all messages
+            self,
+            id: int, peer_id: types.TypePeer,
+            date: Optional[datetime]=None, message: Optional[str]=None,
+            # Copied from Message.__init__ signature
+            out: Optional[bool]=None, mentioned: Optional[bool]=None, media_unread: Optional[bool]=None, silent: Optional[bool]=None, post: Optional[bool]=None, from_scheduled: Optional[bool]=None, legacy: Optional[bool]=None, edit_hide: Optional[bool]=None, pinned: Optional[bool]=None, noforwards: Optional[bool]=None, invert_media: Optional[bool]=None, from_id: Optional[types.TypePeer]=None, from_boosts_applied: Optional[int]=None, saved_peer_id: Optional[types.TypePeer]=None, fwd_from: Optional[types.TypeMessageFwdHeader]=None, via_bot_id: Optional[int]=None, reply_to: Optional[types.TypeMessageReplyHeader]=None, media: Optional[types.TypeMessageMedia]=None, reply_markup: Optional[types.TypeReplyMarkup]=None, entities: Optional[List[types.TypeMessageEntity]]=None, views: Optional[int]=None, forwards: Optional[int]=None, replies: Optional[types.TypeMessageReplies]=None, edit_date: Optional[datetime]=None, post_author: Optional[str]=None, grouped_id: Optional[int]=None, reactions: Optional[types.TypeMessageReactions]=None, restriction_reason: Optional[List[types.TypeRestrictionReason]]=None, ttl_period: Optional[int]=None, quick_reply_shortcut_id: Optional[int]=None,
+            # Copied from MessageService.__init__ signature
+            action: Optional[types.TypeMessageAction]=None
+    ):
+        # Copied from Message.__init__ body
         self.id = id
-        self.to_id = to_id
+        self.peer_id = peer_id
         self.date = date
-        self.out = out
+        self.message = message
+        self.out = bool(out)
         self.mentioned = mentioned
         self.media_unread = media_unread
         self.silent = silent
         self.post = post
-        self.from_id = from_id
-        self.reply_to_msg_id = reply_to_msg_id
-        self.message = message
-        self.fwd_from = fwd_from
-        self.via_bot_id = via_bot_id
-        self.media = None if isinstance(
-            media, types.MessageMediaEmpty) else media
-
-        self.reply_markup = reply_markup
-        self.entities = entities
-        self.views = views
-        self.edit_date = edit_date
-        self.post_author = post_author
-        self.grouped_id = grouped_id
         self.from_scheduled = from_scheduled
         self.legacy = legacy
         self.edit_hide = edit_hide
+        self.pinned = pinned
+        self.noforwards = noforwards
+        self.invert_media = invert_media
+        self.from_id = from_id
+        self.from_boosts_applied = from_boosts_applied
+        self.saved_peer_id = saved_peer_id
+        self.fwd_from = fwd_from
+        self.via_bot_id = via_bot_id
+        self.reply_to = reply_to
+        self.media = None if isinstance(media, types.MessageMediaEmpty) else media
+        self.reply_markup = reply_markup
+        self.entities = entities
+        self.views = views
+        self.forwards = forwards
+        self.replies = replies
+        self.edit_date = edit_date
+        self.post_author = post_author
+        self.grouped_id = grouped_id
+        self.reactions = reactions
         self.restriction_reason = restriction_reason
+        self.ttl_period = ttl_period
+        self.quick_reply_shortcut_id = quick_reply_shortcut_id
+        # Copied from MessageService.__init__ body
         self.action = action
 
         # Convenient storage for custom functions
@@ -205,23 +228,26 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         self._via_bot = None
         self._via_input_bot = None
         self._action_entities = None
+        self._linked_chat = None
 
-        if not out and isinstance(to_id, types.PeerUser):
-            chat_peer = types.PeerUser(from_id)
-            if from_id == to_id.user_id:
-                self.out = not self.fwd_from  # Patch out in our chat
-        else:
-            chat_peer = to_id
+        sender_id = None
+        if from_id is not None:
+            sender_id = utils.get_peer_id(from_id)
+        elif peer_id:
+            # If the message comes from a Channel, let the sender be it
+            # ...or...
+            # incoming messages in private conversations no longer have from_id
+            # (layer 119+), but the sender can only be the chat we're in.
+            if post or (not out and isinstance(peer_id, types.PeerUser)):
+                sender_id = utils.get_peer_id(peer_id)
 
         # Note that these calls would reset the client
-        ChatGetter.__init__(self, chat_peer, broadcast=post)
-        SenderGetter.__init__(self, from_id)
-
-        if post and not from_id and chat_peer:
-            # If the message comes from a Channel, let the sender be it
-            self._sender_id = utils.get_peer_id(chat_peer)
+        ChatGetter.__init__(self, peer_id, broadcast=post)
+        SenderGetter.__init__(self, sender_id)
 
         self._forward = None
+        self._reply_to_chat = None
+        self._reply_to_sender = None
 
     def _finish_init(self, client, entities, input_chat):
         """
@@ -230,7 +256,13 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         known entities.
         """
         self._client = client
-        cache = client._entity_cache
+
+        # Make messages sent to ourselves outgoing unless they're forwarded.
+        # This makes it consistent with official client's appearance.
+        if self.peer_id == types.PeerUser(client._self_id) and not self.fwd_from:
+            self.out = True
+
+        cache = client._mb_entity_cache
 
         self._sender, self._input_sender = utils._get_entity_pair(
             self.sender_id, entities, cache)
@@ -264,6 +296,19 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
                     self.action, types.MessageActionChannelMigrateFrom):
                 self._action_entities = [entities.get(utils.get_peer_id(
                     types.PeerChat(self.action.chat_id)))]
+
+        if self.replies and self.replies.channel_id:
+            self._linked_chat = entities.get(utils.get_peer_id(
+                    types.PeerChannel(self.replies.channel_id)))
+        
+        if isinstance(self.reply_to, types.MessageReplyHeader):
+            if self.reply_to.reply_to_peer_id:
+                self._reply_to_chat = entities.get(utils.get_peer_id(self.reply_to.reply_to_peer_id))
+            if self.reply_to.reply_from:
+                if self.reply_to.reply_from.from_id:
+                    self._reply_to_sender = entities.get(utils.get_peer_id(self.reply_to.reply_from.from_id))
+
+
 
     # endregion Initialization
 
@@ -326,10 +371,10 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         `True` if the message is a reply to some other message.
 
         Remember that you can access the ID of the message
-        this one is replying to through `reply_to_msg_id`,
+        this one is replying to through `reply_to.reply_to_msg_id`,
         and the `Message` object with `get_reply_message()`.
         """
-        return bool(self.reply_to_msg_id)
+        return self.reply_to is not None
 
     @property
     def forward(self):
@@ -338,6 +383,22 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         information if this message is a forwarded message.
         """
         return self._forward
+
+    @property
+    def reply_to_chat(self):
+        """
+        The :tl:`Channel` in which the replied-to message was sent,
+        if this message is a reply in another chat
+        """
+        return self._reply_to_chat
+
+    @property
+    def reply_to_sender(self):
+        """
+        The :tl:`User`, :tl:`Channel`, or whatever other entity that
+        sent the replied-to message, if this message is a reply in another chat.
+        """
+        return self._reply_to_sender
 
     @property
     def buttons(self):
@@ -553,6 +614,14 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
             return self.media
 
     @property
+    def dice(self):
+        """
+        The :tl:`MessageMediaDice` in this message, if it's a dice roll.
+        """
+        if isinstance(self.media, types.MessageMediaDice):
+            return self.media
+
+    @property
     def action_entities(self):
         """
         Returns a list of entities that took part in this action.
@@ -584,6 +653,27 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         Returns the input variant of `via_bot`.
         """
         return self._via_input_bot
+
+    @property
+    def reply_to_msg_id(self):
+        """
+        Returns the message ID this message is replying to, if any.
+        This is equivalent to accessing ``.reply_to.reply_to_msg_id``.
+        """
+        return self.reply_to.reply_to_msg_id if self.reply_to else None
+
+    @property
+    def to_id(self):
+        """
+        Returns the peer to which this message was sent to. This used to exist
+        to infer the ``.peer_id``.
+        """
+        # If the client wasn't set we can't emulate the behaviour correctly,
+        # so as a best-effort simply return the chat peer.
+        if self._client and not self.out and self.is_private:
+            return types.PeerUser(self._client._self_id)
+
+        return self.peer_id
 
     # endregion Public Properties
 
@@ -636,7 +726,7 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         The result will be cached after its first use.
         """
         if self._reply_message is None and self._client:
-            if not self.reply_to_msg_id:
+            if not self.reply_to:
                 return None
 
             # Bots cannot access other bots' messages by their ID.
@@ -652,7 +742,7 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
                 # directly by its ID.
                 self._reply_message = await self._client.get_messages(
                     self._input_chat if self.is_channel else None,
-                    ids=self.reply_to_msg_id
+                    ids=self.reply_to.reply_to_msg_id
                 )
 
         return self._reply_message
@@ -695,12 +785,26 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
 
     async def edit(self, *args, **kwargs):
         """
-        Edits the message iff it's outgoing. Shorthand for
+        Edits the message if it's outgoing. Shorthand for
         `telethon.client.messages.MessageMethods.edit_message`
         with both ``entity`` and ``message`` already set.
 
-        Returns `None` if the message was incoming,
-        or the edited `Message` otherwise.
+        Returns
+            The edited `Message <telethon.tl.custom.message.Message>`,
+            unless `entity` was a :tl:`InputBotInlineMessageID` or :tl:`InputBotInlineMessageID64` in which
+            case this method returns a boolean.
+
+        Raises
+            ``MessageAuthorRequiredError`` if you're not the author of the
+            message but tried editing it anyway.
+
+            ``MessageNotModifiedError`` if the contents of the message were
+            not modified at all.
+
+            ``MessageIdInvalidError`` if the ID of the message is invalid
+            (the ID itself may be correct, but the message with that ID
+            cannot be edited). For example, when trying to edit messages
+            with a reply markup (or clear markup) this error will be raised.
 
         .. note::
 
@@ -714,9 +818,6 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
             This is generally the most desired and convenient behaviour,
             and will work for link previews and message buttons.
         """
-        if self.fwd_from or not self.out or not self._client:
-            return None  # We assume self.out was patched for our chat
-
         if 'link_preview' not in kwargs:
             kwargs['link_preview'] = bool(self.web_preview)
 
@@ -753,19 +854,24 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         with the ``message`` already set.
         """
         if self._client:
+            # Passing the entire message is important, in case it has to be
+            # refetched for a fresh file reference.
             return await self._client.download_media(self, *args, **kwargs)
 
     async def click(self, i=None, j=None,
-                    *, text=None, filter=None, data=None):
+                    *, text=None, filter=None, data=None, share_phone=None,
+                    share_geo=None, password=None):
         """
-        Calls `button.click <telethon.tl.custom.messagebutton.MessageButton.click>`
+        Calls :tl:`SendVote` with the specified poll option
+        or `button.click <telethon.tl.custom.messagebutton.MessageButton.click>`
         on the specified button.
 
-        Does nothing if the message has no buttons.
+        Does nothing if the message is not a poll or has no buttons.
 
         Args:
-            i (`int`):
-                Clicks the i'th button (starting from the index 0).
+            i (`int` | `list`):
+                Clicks the i'th button or poll option (starting from the index 0).
+                For multiple-choice polls, a list with the indices should be used.
                 Will ``raise IndexError`` if out of bounds. Example:
 
                 >>> message = ...  # get the message somehow
@@ -788,15 +894,21 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
                 This is equivalent to ``message.buttons[0][1].click()``.
 
             text (`str` | `callable`):
-                Clicks the first button with the text "text". This may
+                Clicks the first button or poll option with the text "text". This may
                 also be a callable, like a ``re.compile(...).match``,
                 and the text will be passed to it.
 
+                If you need to select multiple options in a poll,
+                pass a list of indices to the ``i`` parameter.
+
             filter (`callable`):
-                Clicks the first button for which the callable
+                Clicks the first button or poll option for which the callable
                 returns `True`. The callable should accept a single
                 `MessageButton <telethon.tl.custom.messagebutton.MessageButton>`
-                argument.
+                or `PollAnswer <telethon.tl.types.PollAnswer>` argument.
+
+                If you need to select multiple options in a poll,
+                pass a list of indices to the ``i`` parameter.
 
             data (`bytes`):
                 This argument overrides the rest and will not search any
@@ -804,6 +916,34 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
                 behave as if it clicked a button with said data. Note
                 that if the message does not have this data, it will
                 ``raise DataInvalidError``.
+
+            share_phone (`bool` | `str` | tl:`InputMediaContact`):
+                When clicking on a keyboard button requesting a phone number
+                (:tl:`KeyboardButtonRequestPhone`), this argument must be
+                explicitly set to avoid accidentally sharing the number.
+
+                It can be `True` to automatically share the current user's
+                phone, a string to share a specific phone number, or a contact
+                media to specify all details.
+
+                If the button is pressed without this, `ValueError` is raised.
+
+            share_geo (`tuple` | `list` | tl:`InputMediaGeoPoint`):
+                When clicking on a keyboard button requesting a geo location
+                (:tl:`KeyboardButtonRequestGeoLocation`), this argument must
+                be explicitly set to avoid accidentally sharing the location.
+
+                It must be a `tuple` of `float` as ``(longitude, latitude)``,
+                or a :tl:`InputGeoPoint` instance to avoid accidentally using
+                the wrong roder.
+
+                If the button is pressed without this, `ValueError` is raised.
+
+            password (`str`):
+                When clicking certain buttons (such as BotFather's confirmation
+                button to transfer ownership), if your account has 2FA enabled,
+                you need to provide your account's password. Otherwise,
+                `teltehon.errors.PasswordHashInvalidError` is raised.
 
             Example:
 
@@ -820,54 +960,94 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
 
                     # Click by data
                     await message.click(data=b'payload')
+
+                    # Click on a button requesting a phone
+                    await message.click(0, share_phone=True)
         """
         if not self._client:
             return
 
         if data:
-            if not await self.get_input_chat():
+            chat = await self.get_input_chat()
+            if not chat:
                 return None
 
-            try:
-                return await self._client(
-                    functions.messages.GetBotCallbackAnswerRequest(
-                        peer=self._input_chat,
-                        msg_id=self.id,
-                        data=data
-                    )
-                )
-            except errors.BotTimeout:
-                return None
+            but = types.KeyboardButtonCallback('', data)
+            return await MessageButton(self._client, but, chat, None, self.id).click(
+                share_phone=share_phone, share_geo=share_geo, password=password)
 
         if sum(int(x is not None) for x in (i, text, filter)) >= 2:
             raise ValueError('You can only set either of i, text or filter')
 
+        # Finding the desired poll options and sending them
+        if self.poll is not None:
+            def find_options():
+                answers = self.poll.poll.answers
+                if i is not None:
+                    if utils.is_list_like(i):
+                        return [answers[idx].option for idx in i]
+                    return [answers[i].option]
+                if text is not None:
+                    if callable(text):
+                        for answer in answers:
+                            if text(answer.text):
+                                return [answer.option]
+                    else:
+                        for answer in answers:
+                            if answer.text == text:
+                                return [answer.option]
+                    return
+
+                if filter is not None:
+                    for answer in answers:
+                        if filter(answer):
+                            return [answer.option]
+                    return
+
+            options = find_options()
+            if options is None:
+                options = []
+            return await self._client(
+                functions.messages.SendVoteRequest(
+                    peer=self._input_chat,
+                    msg_id=self.id,
+                    options=options
+                )
+            )
+
         if not await self.get_buttons():
             return  # Accessing the property sets self._buttons[_flat]
 
-        if text is not None:
-            if callable(text):
+        def find_button():
+            nonlocal i
+            if text is not None:
+                if callable(text):
+                    for button in self._buttons_flat:
+                        if text(button.text):
+                            return button
+                else:
+                    for button in self._buttons_flat:
+                        if button.text == text:
+                            return button
+                return
+
+            if filter is not None:
                 for button in self._buttons_flat:
-                    if text(button.text):
-                        return await button.click()
+                    if filter(button):
+                        return button
+                return
+
+            if i is None:
+                i = 0
+            if j is None:
+                return self._buttons_flat[i]
             else:
-                for button in self._buttons_flat:
-                    if button.text == text:
-                        return await button.click()
-            return
+                return self._buttons[i][j]
 
-        if filter is not None:
-            for button in self._buttons_flat:
-                if filter(button):
-                    return await button.click()
-            return
-
-        if i is None:
-            i = 0
-        if j is None:
-            return await self._buttons_flat[i].click()
-        else:
-            return await self._buttons[i][j].click()
+        button = find_button()
+        if button:
+            return await button.click(
+                share_phone=share_phone, share_geo=share_geo, password=password)
 
     async def mark_read(self):
         """
@@ -880,7 +1060,7 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
             await self._client.send_read_acknowledge(
                 await self.get_input_chat(), max_id=self.id)
 
-    async def pin(self, *, notify=False):
+    async def pin(self, *, notify=False, pm_oneside=False):
         """
         Pins the message. Shorthand for
         `telethon.client.messages.MessageMethods.pin_message`
@@ -890,8 +1070,18 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         #      maybe just make it illegal to call messages from raw API?
         #      That or figure out a way to always set it directly.
         if self._client:
-            await self._client.pin_message(
-                await self.get_input_chat(), self.id, notify=notify)
+            return await self._client.pin_message(
+                await self.get_input_chat(), self.id, notify=notify, pm_oneside=pm_oneside)
+
+    async def unpin(self):
+        """
+        Unpins the message. Shorthand for
+        `telethon.client.messages.MessageMethods.unpin_message`
+        with both ``entity`` and ``message`` already set.
+        """
+        if self._client:
+            return await self._client.unpin_message(
+                await self.get_input_chat(), self.id)
 
     # endregion Public Methods
 
@@ -952,14 +1142,17 @@ class Message(ChatGetter, SenderGetter, TLObject, abc.ABC):
         for row in self.reply_markup.rows:
             for button in row.buttons:
                 if isinstance(button, types.KeyboardButtonSwitchInline):
-                    if button.same_peer:
+                    # no via_bot_id means the bot sent the message itself (#1619)
+                    if button.same_peer or not self.via_bot_id:
                         bot = self.input_sender
                         if not bot:
                             raise ValueError('No input sender')
+                        return bot
                     else:
                         try:
-                            return self._client._entity_cache[self.via_bot_id]
-                        except KeyError:
+                            return self._client._mb_entity_cache.get(
+                                utils.resolve_id(self.via_bot_id)[0])._as_input_peer()
+                        except AttributeError:
                             raise ValueError('No input sender') from None
 
     def _document_by_attribute(self, kind, condition=None):

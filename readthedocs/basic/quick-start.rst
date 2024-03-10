@@ -19,7 +19,7 @@ use these if possible.
         # Getting information about yourself
         me = await client.get_me()
 
-        # "me" is an User object. You can pretty-print
+        # "me" is a user object. You can pretty-print
         # any Telegram object with the "stringify" method:
         print(me.stringify())
 
@@ -41,13 +41,13 @@ use these if possible.
         # ...to your contacts
         await client.send_message('+34600123123', 'Hello, friend!')
         # ...or even to any username
-        await client.send_message('TelethonChat', 'Hello, Telethon!')
+        await client.send_message('username', 'Testing Telethon!')
 
         # You can, of course, use markdown in your messages:
         message = await client.send_message(
             'me',
             'This message has **bold**, `code`, __italics__ and '
-            'a [nice website](https://lonamiwebs.github.io)!',
+            'a [nice website](https://example.com)!',
             link_preview=False
         )
 

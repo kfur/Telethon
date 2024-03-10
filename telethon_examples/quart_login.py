@@ -1,10 +1,10 @@
 import base64
 import os
 
-import hypercorn.asyncio
 from quart import Quart, render_template_string, request
 
 from telethon import TelegramClient, utils
+from telethon.errors import SessionPasswordNeededError
 
 
 def get_env(name, message):
@@ -34,6 +34,13 @@ PHONE_FORM = '''
 CODE_FORM = '''
 <form action='/' method='post'>
     Telegram code: <input name='code' type='text' placeholder='70707'>
+    <input type='submit'>
+</form>
+'''
+
+PASSWORD_FORM = '''
+<form action='/' method='post'>
+    Telegram password: <input name='password' type='text' placeholder='your password'>
     <input type='submit'>
 </form>
 '''
@@ -74,6 +81,8 @@ async def format_message(message):
 # Connect the client before we start serving with Quart
 @app.before_serving
 async def startup():
+    # After connecting, the client will create additional asyncio tasks that run until it's disconnected again.
+    # Be careful to not mix different asyncio loops during a client's lifetime, or things won't work properly!
     await client.connect()
 
 
@@ -95,7 +104,13 @@ async def root():
         await client.send_code_request(phone)
 
     if 'code' in form:
-        await client.sign_in(code=form['code'])
+        try:
+            await client.sign_in(code=form['code'])
+        except SessionPasswordNeededError:
+            return await render_template_string(BASE_TEMPLATE, content=PASSWORD_FORM)
+
+    if 'password' in form:
+        await client.sign_in(password=form['password'])
 
     # If we're logged in, show them some messages from their first dialog
     if await client.is_user_authorized():
@@ -115,24 +130,11 @@ async def root():
     return await render_template_string(BASE_TEMPLATE, content=CODE_FORM)
 
 
-async def main():
-    await hypercorn.asyncio.serve(app, hypercorn.Config())
-
-
 # By default, `Quart.run` uses `asyncio.run()`, which creates a new asyncio
-# event loop. If we create the `TelegramClient` before, `telethon` will
-# use `asyncio.get_event_loop()`, which is the implicit loop in the main
-# thread. These two loops are different, and it won't work.
+# event loop. If we had connected the `TelegramClient` before, `telethon` will
+# use `asyncio.get_running_loop()` to create some additional tasks. If these
+# loops are different, it won't work.
 #
-# So, we have to manually pass the same `loop` to both applications to
-# make 100% sure it works and to avoid headaches.
-#
-# To run Quart inside `async def`, we must use `hypercorn.asyncio.serve()`
-# directly.
-#
-# This example creates a global client outside of Quart handlers.
-# If you create the client inside the handlers (common case), you
-# won't have to worry about any of this, but it's still good to be
-# explicit about the event loop.
+# To keep things simple, be sure to not create multiple asyncio loops!
 if __name__ == '__main__':
-    client.loop.run_until_complete(main())
+    app.run()

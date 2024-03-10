@@ -136,6 +136,24 @@ MessageButton
     :show-inheritance:
 
 
+ParticipantPermissions
+======================
+
+.. automodule:: telethon.tl.custom.participantpermissions
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+
+QRLogin
+=======
+
+.. automodule:: telethon.tl.custom.qrlogin
+    :members:
+    :undoc-members:
+    :show-inheritance:
+
+
 SenderGetter
 ============
 

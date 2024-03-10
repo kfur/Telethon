@@ -67,7 +67,7 @@ class MessageParseMethods:
                 entities[i].offset, entities[i].length,
                 await self.get_input_entity(user)
             )
-            return True            
+            return True
         except (ValueError, TypeError):
             return False
 
@@ -83,10 +83,19 @@ class MessageParseMethods:
         if not parse_mode:
             return message, []
 
+        original_message = message
         message, msg_entities = parse_mode.parse(message)
+        if original_message and not message and not msg_entities:
+            raise ValueError("Failed to parse message")
+
         for i in reversed(range(len(msg_entities))):
             e = msg_entities[i]
-            if isinstance(e, types.MessageEntityTextUrl):
+            if not e.length:
+                # 0-length MessageEntity is no longer valid #3884.
+                # Because the user can provide their own parser (with reasonable 0-length
+                # entities), strip them here rather than fixing the built-in parsers.
+                del msg_entities[i]
+            elif isinstance(e, types.MessageEntityTextUrl):
                 m = re.match(r'^@|\+|tg://user\?id=(\d+)', e.url)
                 if m:
                     user = int(m.group(1)) if m.group(1) else e.url
@@ -123,7 +132,6 @@ class MessageParseMethods:
 
         random_to_id = {}
         id_to_message = {}
-        sched_to_message = {}  # scheduled IDs may collide with normal IDs
         for update in updates:
             if isinstance(update, types.UpdateMessageID):
                 random_to_id[update.random_id] = update.id
@@ -131,7 +139,18 @@ class MessageParseMethods:
             elif isinstance(update, (
                     types.UpdateNewChannelMessage, types.UpdateNewMessage)):
                 update.message._finish_init(self, entities, input_chat)
-                id_to_message[update.message.id] = update.message
+
+                # Pinning a message with `updatePinnedMessage` seems to
+                # always produce a service message we can't map so return
+                # it directly. The same happens for kicking users.
+                #
+                # It could also be a list (e.g. when sending albums).
+                #
+                # TODO this method is getting messier and messier as time goes on
+                if hasattr(request, 'random_id') or utils.is_list_like(request):
+                    id_to_message[update.message.id] = update.message
+                else:
+                    return update.message
 
             elif (isinstance(update, types.UpdateEditMessage)
                   and helpers._entity_type(request.peer) != helpers._EntityType.CHANNEL):
@@ -146,20 +165,23 @@ class MessageParseMethods:
 
             elif (isinstance(update, types.UpdateEditChannelMessage)
                   and utils.get_peer_id(request.peer) ==
-                  utils.get_peer_id(update.message.to_id)):
+                  utils.get_peer_id(update.message.peer_id)):
                 if request.id == update.message.id:
                     update.message._finish_init(self, entities, input_chat)
                     return update.message
 
             elif isinstance(update, types.UpdateNewScheduledMessage):
                 update.message._finish_init(self, entities, input_chat)
-                sched_to_message[update.message.id] = update.message
+                # Scheduled IDs may collide with normal IDs. However, for a
+                # single request there *shouldn't* be a mix between "some
+                # scheduled and some not".
+                id_to_message[update.message.id] = update.message
 
             elif isinstance(update, types.UpdateMessagePoll):
                 if request.media.poll.id == update.poll_id:
                     m = types.Message(
                         id=request.id,
-                        to_id=utils.get_peer(request.peer),
+                        peer_id=utils.get_peer(request.peer),
                         media=types.MessageMediaPoll(
                             poll=update.poll,
                             results=update.results
@@ -171,22 +193,15 @@ class MessageParseMethods:
         if request is None:
             return id_to_message
 
-        # Use the scheduled mapping if we got a request with a scheduled message
-        #
-        # This breaks if the schedule date is too young, however, since the message
-        # is sent immediately, so have a fallback.
-        if getattr(request, 'schedule_date', None) is None:
-            mapping = id_to_message
-            opposite = {}  # if there's no schedule it can never be scheduled
-        else:
-            mapping = sched_to_message
-            opposite = id_to_message  # scheduled may be treated as normal, though
+        random_id = request if isinstance(request, (int, list)) else getattr(request, 'random_id', None)
+        if random_id is None:
+            # Can happen when pinning a message does not actually produce a service message.
+            self._log[__name__].warning(
+                'No random_id in %s to map to, returning None message for %s', request, result)
+            return None
 
-        random_id = request if isinstance(request, (int, list)) else request.random_id
         if not utils.is_list_like(random_id):
-            msg = mapping.get(random_to_id.get(random_id))
-            if not msg:
-                msg = opposite.get(random_to_id.get(random_id))
+            msg = id_to_message.get(random_to_id.get(random_id))
 
             if not msg:
                 self._log[__name__].warning(
@@ -195,22 +210,24 @@ class MessageParseMethods:
             return msg
 
         try:
-            return [mapping[random_to_id[rnd]] for rnd in random_id]
+            return [id_to_message[random_to_id[rnd]] for rnd in random_id]
         except KeyError:
-            try:
-                return [opposite[random_to_id[rnd]] for rnd in random_id]
-            except KeyError:
-                # Sometimes forwards fail (`MESSAGE_ID_INVALID` if a message gets
-                # deleted or `WORKER_BUSY_TOO_LONG_RETRY` if there are issues at
-                # Telegram), in which case we get some "missing" message mappings.
-                # Log them with the hope that we can better work around them.
-                self._log[__name__].warning(
-                    'Request %s had missing message mappings %s', request, result)
+            # Sometimes forwards fail (`MESSAGE_ID_INVALID` if a message gets
+            # deleted or `WORKER_BUSY_TOO_LONG_RETRY` if there are issues at
+            # Telegram), in which case we get some "missing" message mappings.
+            # Log them with the hope that we can better work around them.
+            #
+            # This also happens when trying to forward messages that can't
+            # be forwarded because they don't exist (0, service, deleted)
+            # among others which could be (like deleted or existing).
+            self._log[__name__].warning(
+                'Request %s had missing message mappings %s', request, result)
 
         return [
-            mapping.get(random_to_id.get(rnd))
-            or opposite.get(random_to_id.get(rnd))
-            for rnd in random_to_id
+            id_to_message.get(random_to_id[rnd])
+            if rnd in random_to_id
+            else None
+            for rnd in random_id
         ]
 
     # endregion

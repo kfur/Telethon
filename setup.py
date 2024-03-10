@@ -15,12 +15,15 @@ import json
 import os
 import re
 import shutil
+import sys
+import urllib.request
 from pathlib import Path
 from subprocess import run
-from sys import argv
 
 from setuptools import find_packages, setup
 
+# Needed since we're importing local files
+sys.path.insert(0, os.path.dirname(__file__))
 
 class TempWorkDir:
     """Switches the working directory to be the one on which this file lives,
@@ -40,6 +43,8 @@ class TempWorkDir:
     def __exit__(self, *args):
         os.chdir(self.original)
 
+
+API_REF_URL = 'https://tl.telethon.dev/'
 
 GENERATOR_DIR = Path('telethon_generator')
 LIBRARY_DIR = Path('telethon')
@@ -148,23 +153,46 @@ def generate(which, action='gen'):
         )
 
 
-def main():
+def main(argv):
     if len(argv) >= 2 and argv[1] in ('gen', 'clean'):
         generate(argv[2:], argv[1])
 
     elif len(argv) >= 2 and argv[1] == 'pypi':
+        # Make sure tl.telethon.dev is up-to-date first
+        with urllib.request.urlopen(API_REF_URL) as resp:
+            html = resp.read()
+            m = re.search(br'layer\s+(\d+)', html)
+            if not m:
+                print('Failed to check that the API reference is up to date:', API_REF_URL)
+                return
+
+            from telethon_generator.parsers import find_layer
+            layer = next(filter(None, map(find_layer, TLOBJECT_IN_TLS)))
+            published_layer = int(m[1])
+            if published_layer != layer:
+                print('Published layer', published_layer, 'does not match current layer', layer, '.')
+                print('Make sure to update the API reference site first:', API_REF_URL)
+                return
+
         # (Re)generate the code to make sure we don't push without it
         generate(['tl', 'errors'])
 
         # Try importing the telethon module to assert it has no errors
         try:
             import telethon
-        except:
+        except Exception as e:
             print('Packaging for PyPi aborted, importing the module failed.')
+            print(e)
             return
 
-        for x in ('build', 'dist', 'Telethon.egg-info'):
+        remove_dirs = ['__pycache__', 'build', 'dist', 'Telethon.egg-info']
+        for root, _dirs, _files in os.walk(LIBRARY_DIR, topdown=False):
+            # setuptools is including __pycache__ for some reason (#1605)
+            if root.endswith('/__pycache__'):
+                remove_dirs.append(root)
+        for x in remove_dirs:
             shutil.rmtree(x, ignore_errors=True)
+
         run('python3 setup.py sdist', shell=True)
         run('python3 setup.py bdist_wheel', shell=True)
         run('twine upload dist/*', shell=True)
@@ -216,11 +244,13 @@ def main():
 
                 'Programming Language :: Python :: 3',
                 'Programming Language :: Python :: 3.5',
-                'Programming Language :: Python :: 3.6'
+                'Programming Language :: Python :: 3.6',
+                'Programming Language :: Python :: 3.7',
+                'Programming Language :: Python :: 3.8',
             ],
             keywords='telegram api chat client library messaging mtproto',
             packages=find_packages(exclude=[
-                'telethon_*', 'run_tests.py', 'try_telethon.py'
+                'telethon_*', 'tests*'
             ]),
             install_requires=['pyaes', 'rsa'],
             extras_require={
@@ -231,4 +261,4 @@ def main():
 
 if __name__ == '__main__':
     with TempWorkDir():
-        main()
+        main(sys.argv)

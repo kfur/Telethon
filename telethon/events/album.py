@@ -1,4 +1,6 @@
+import asyncio
 import time
+import weakref
 
 from .common import EventBuilder, EventCommon, name_inner_event
 from .. import utils
@@ -14,12 +16,79 @@ _IGNORE_MAX_AGE = 5  # seconds
 _IGNORE_DICT = {}
 
 
+_HACK_DELAY = 0.5
+
+
+class AlbumHack:
+    """
+    When receiving an album from a different data-center, they will come in
+    separate `Updates`, so we need to temporarily remember them for a while
+    and only after produce the event.
+
+    Of course events are not designed for this kind of wizardy, so this is
+    a dirty hack that gets the job done.
+
+    When cleaning up the code base we may want to figure out a better way
+    to do this, or just leave the album problem to the users; the update
+    handling code is bad enough as it is.
+    """
+    def __init__(self, client, event):
+        # It's probably silly to use a weakref here because this object is
+        # very short-lived but might as well try to do "the right thing".
+        self._client = weakref.ref(client)
+        self._event = event  # parent event
+        self._due = client.loop.time() + _HACK_DELAY
+
+        client.loop.create_task(self.deliver_event())
+
+    def extend(self, messages):
+        client = self._client()
+        if client:  # weakref may be dead
+            self._event.messages.extend(messages)
+            self._due = client.loop.time() + _HACK_DELAY
+
+    async def deliver_event(self):
+        while True:
+            client = self._client()
+            if client is None:
+                return  # weakref is dead, nothing to deliver
+
+            diff = self._due - client.loop.time()
+            if diff <= 0:
+                # We've hit our due time, deliver event. It won't respect
+                # sequential updates but fixing that would just worsen this.
+                await client._dispatch_event(self._event)
+                return
+
+            del client  # Clear ref and sleep until our due time
+            await asyncio.sleep(diff)
+
+
 @name_inner_event
 class Album(EventBuilder):
     """
     Occurs whenever you receive an album. This event only exists
     to ease dealing with an unknown amount of messages that belong
     to the same album.
+
+    Example
+        .. code-block:: python
+
+            from telethon import events
+
+            @client.on(events.Album)
+            async def handler(event):
+                # Counting how many photos or videos the album has
+                print('Got an album with', len(event), 'items')
+
+                # Forwarding the album as a whole to some chat
+                event.forward_to(chat)
+
+                # Printing the caption
+                print(event.text)
+
+                # Replying to the fifth item in the album
+                await event.messages[4].reply('Cool!')
     """
 
     def __init__(
@@ -28,8 +97,10 @@ class Album(EventBuilder):
 
     @classmethod
     def build(cls, update, others=None, self_id=None):
-        if not others:
-            return  # We only care about albums which come inside the same Updates
+        # TODO normally we'd only check updates if they come with other updates
+        # but MessageBox is not designed for this so others will always be None.
+        # In essence we always rely on AlbumHack rather than returning early if not others.
+        others = [update]
 
         if isinstance(update,
                       (types.UpdateNewMessage, types.UpdateNewChannelMessage)):
@@ -47,6 +118,7 @@ class Album(EventBuilder):
                 return
 
             # Check if the ignore list is too big, and if it is clean it
+            # TODO time could technically go backwards; time is not monotonic
             now = time.time()
             if len(_IGNORE_DICT) > _IGNORE_MAX_SIZE:
                 for i in [i for i, t in _IGNORE_DICT.items() if now - t > _IGNORE_MAX_AGE]:
@@ -65,6 +137,11 @@ class Album(EventBuilder):
                     and u.message.grouped_id == group)
             ])
 
+    def filter(self, event):
+        # Albums with less than two messages require a few hacks to work.
+        if len(event.messages) > 1:
+            return super().filter(event)
+
     class Event(EventCommon, SenderGetter):
         """
         Represents the event of a new album.
@@ -75,26 +152,26 @@ class Album(EventBuilder):
         """
         def __init__(self, messages):
             message = messages[0]
-            if not message.out and isinstance(message.to_id, types.PeerUser):
-                # Incoming message (e.g. from a bot) has to_id=us, and
-                # from_id=bot (the actual "chat" from a user's perspective).
-                chat_peer = types.PeerUser(message.from_id)
-            else:
-                chat_peer = message.to_id
-
-            super().__init__(chat_peer=chat_peer,
+            super().__init__(chat_peer=message.peer_id,
                              msg_id=message.id, broadcast=bool(message.post))
-
             SenderGetter.__init__(self, message.sender_id)
             self.messages = messages
 
         def _set_client(self, client):
             super()._set_client(client)
             self._sender, self._input_sender = utils._get_entity_pair(
-                self.sender_id, self._entities, client._entity_cache)
+                self.sender_id, self._entities, client._mb_entity_cache)
 
             for msg in self.messages:
                 msg._finish_init(client, self._entities, None)
+
+            if len(self.messages) == 1:
+                # This will require hacks to be a proper album event
+                hack = client._albums.get(self.grouped_id)
+                if hack is None:
+                    client._albums[self.grouped_id] = AlbumHack(client, self)
+                else:
+                    hack.extend(self.messages)
 
         @property
         def grouped_id(self):
@@ -177,7 +254,6 @@ class Album(EventBuilder):
             """
             if self._client:
                 kwargs['messages'] = self.messages
-                kwargs['as_album'] = True
                 kwargs['from_peer'] = await self.get_input_chat()
                 return await self._client.forward_messages(*args, **kwargs)
 
@@ -240,7 +316,7 @@ class Album(EventBuilder):
             `telethon.client.messages.MessageMethods.pin_message`
             with both ``entity`` and ``message`` already set.
             """
-            await self.messages[0].pin(notify=notify)
+            return await self.messages[0].pin(notify=notify)
 
         def __len__(self):
             """

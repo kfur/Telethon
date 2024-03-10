@@ -25,7 +25,7 @@ you should use :tl:`GetFullUser`:
     # or even
     full = await client(GetFullUserRequest('username'))
 
-    bio = full.about
+    bio = full.full_user.about
 
 
 See :tl:`UserFull` to know what other fields you can access.
@@ -71,4 +71,4 @@ through :tl:`UploadProfilePhoto`:
 
     await client(UploadProfilePhotoRequest(
         await client.upload_file('/path/to/some/file')
-    )))
+    ))

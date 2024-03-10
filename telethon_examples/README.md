@@ -71,14 +71,20 @@ not really needed for the previous two trivial examples.
 * Usable as a: **bot**.
 * Difficulty: **medium**.
 
-This example is the actual bot account [@TelethonianBot] running in the
-[official Telethon's chat] to help people out. The file is a bit big and
-assumes some [`asyncio`] knowledge, but otherwise is easy to follow.
+This example is the core of the actual bot account [@TelethonianBot] running
+in the [official Telethon's chat] to help people out. It showcases how to
+create an extremely simple "plugins" system with Telethon, but you're free
+to borrow ideas from it and make it as fancy as you like (perhaps you want
+to add hot reloading?).
 
-In addition, it has optional plugins, which may be useful for your own code.
-The plugins can be found at https://github.com/Lonami/TelethonianBotExt and
-should be cloned into a `plugins` folder next to `assistant.py` for them to
-work.
+The plugins are a separate Python file each which get loaded dynamically and
+can be found at <https://github.com/Lonami/TelethonianBotExt>. To use them,
+clone the repository into a `plugins` folder next to `assistant.py` and then
+run `assistant.py`.
+
+The content of the plugins or how they work is not really relevant. You can
+disable them by moving them elsewhere or deleting the file entirely. The point
+is to learn how you can build fancy things with your own code and Telethon.
 
 ### [`interactive_telegram_client.py`]
 
@@ -130,20 +136,32 @@ assumes some [`asyncio`] knowledge, but otherwise is easy to follow.
 
 ![Screenshot of the tkinter GUI][tkinter GUI]
 
+### [`payment.py`](https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/payment.py)
+
+* Usable as: **bot**.
+* Difficulty: **medium**.
+
+This example shows how to make invoices (Telegram's way of requesting payments) via a bot account. The example does not include how to add shipping information, though.
+
+You'll need to obtain a "provider token" to use this example, so please read [Telegram's guide on payments](https://core.telegram.org/bots/payments) before using this example.
+
+
+It makes use of the ["raw API"](https://tl.telethon.dev) (that is, no friendly `client.` methods), which can be helpful in understanding how it works and how it can be used.
+
 
 [Telethon]: https://github.com/LonamiWebs/Telethon
-[CC0 License]: https://github.com/LonamiWebs/Telethon/blob/master/telethon_examples/LICENSE
+[CC0 License]: https://github.com/LonamiWebs/Telethon/blob/v1/telethon_examples/LICENSE
 [@BotFather]: https://t.me/BotFather
-[`assistant.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/master/telethon_examples/assistant.py
-[`quart_login.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/master/telethon_examples/quart_login.py
-[`gui.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/master/telethon_examples/gui.py
-[`interactive_telegram_client.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/master/telethon_examples/interactive_telegram_client.py
-[`print_messages.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/master/telethon_examples/print_messages.py
-[`print_updates.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/master/telethon_examples/print_updates.py
-[`replier.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/master/telethon_examples/replier.py
+[`assistant.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/assistant.py
+[`quart_login.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/quart_login.py
+[`gui.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/gui.py
+[`interactive_telegram_client.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/interactive_telegram_client.py
+[`print_messages.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/print_messages.py
+[`print_updates.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/print_updates.py
+[`replier.py`]: https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/replier.py
 [@TelethonianBot]: https://t.me/TelethonianBot
 [official Telethon's chat]: https://t.me/TelethonChat
 [`asyncio`]: https://docs.python.org/3/library/asyncio.html
 [`tkinter`]: https://docs.python.org/3/library/tkinter.html
-[tkinter GUI]: https://raw.githubusercontent.com/LonamiWebs/Telethon/master/telethon_examples/screenshot-gui.jpg
-[`events.NewMessage`]: https://docs.telethon.dev/en/latest/modules/events.html#telethon.events.newmessage.NewMessage
+[tkinter GUI]: https://raw.githubusercontent.com/LonamiWebs/Telethon/v1/telethon_examples/screenshot-gui.jpg
+[`events.NewMessage`]: https://docs.telethon.dev/en/stable/modules/events.html#telethon.events.newmessage.NewMessage

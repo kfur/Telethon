@@ -68,6 +68,7 @@ You can also use the menu on the left to quickly skip over sections.
 
     concepts/strings
     concepts/entities
+    concepts/chats-vs-channels
     concepts/updates
     concepts/sessions
     concepts/full-api
@@ -83,7 +84,6 @@ You can also use the menu on the left to quickly skip over sections.
     examples/chats-and-channels
     examples/users
     examples/working-with-messages
-    examples/projects-using-telethon
 
 .. toctree::
     :hidden:

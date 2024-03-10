@@ -35,3 +35,7 @@ times, in this case, ``22222`` so we can hardcode that:
     client.start(
         phone='9996621234', code_callback=lambda: '22222'
     )
+
+Note that Telegram has changed the length of login codes multiple times in the
+past, so if ``dc_id`` repeated five times does not work, try repeating it six
+times.

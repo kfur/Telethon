@@ -40,13 +40,12 @@ because tasks are smaller than threads, which are smaller than processes.
 What are asyncio basics?
 ========================
 
+The code samples below assume that you have Python 3.7 or greater installed.
+
 .. code-block:: python
 
     # First we need the asyncio library
     import asyncio
-
-    # Then we need a loop to work with
-    loop = asyncio.get_event_loop()
 
     # We also need something to run
     async def main():
@@ -54,8 +53,9 @@ What are asyncio basics?
             print(char, end='', flush=True)
             await asyncio.sleep(0.2)
 
-    # Then, we need to run the loop with a task
-    loop.run_until_complete(main())
+    # Then, we can create a new asyncio loop and use it to run our coroutine.
+    # The creation and tear-down of the loop is hidden away from us.
+    asyncio.run(main())
 
 
 What does telethon.sync do?
@@ -101,7 +101,7 @@ Instead of this:
 
     # or, using asyncio's default loop (it's the same)
     import asyncio
-    loop = asyncio.get_event_loop()  # == client.loop
+    loop = asyncio.get_running_loop()  # == client.loop
     me = loop.run_until_complete(client.get_me())
     print(me.username)
 
@@ -158,13 +158,10 @@ loops or use ``async with``:
 
                 print(message.sender.username)
 
-    loop = asyncio.get_event_loop()
-    # ^ this assigns the default event loop from the main thread to a variable
-
-    loop.run_until_complete(main())
-    # ^ this runs the *entire* loop until the main() function finishes.
-    #   While the main() function does not finish, the loop will be running.
-    #   While the loop is running, you can't run it again.
+    asyncio.run(main())
+    # ^ this will create a new asyncio loop behind the scenes and tear it down
+    #   once the function returns. It will run the loop untiil main finishes.
+    #   You should only use this function if there is no other loop running.
 
 
 The ``await`` keyword blocks the *current* task, and the loop can run
@@ -184,14 +181,14 @@ concurrently:
         await asyncio.sleep(delay)  # await tells the loop this task is "busy"
         print('world')  # eventually the loop finishes all tasks
 
-    loop = asyncio.get_event_loop()  # get the default loop for the main thread
-    loop.create_task(world(2))  # create the world task, passing 2 as delay
-    loop.create_task(hello(delay=1))  # another task, but with delay 1
+    async def main():
+        asyncio.create_task(world(2))  # create the world task, passing 2 as delay
+        asyncio.create_task(hello(delay=1))  # another task, but with delay 1
+        await asyncio.sleep(3)  # wait for three seconds before exiting
+
     try:
-        # run the event loop forever; ctrl+c to stop it
-        # we could also run the loop for three seconds:
-        #     loop.run_until_complete(asyncio.sleep(3))
-        loop.run_forever()
+        # create a new temporary asyncio loop and use it to run main
+        asyncio.run(main())
     except KeyboardInterrupt:
         pass
 
@@ -209,29 +206,36 @@ The same example, but without the comment noise:
         await asyncio.sleep(delay)
         print('world')
 
-    loop = asyncio.get_event_loop()
-    loop.create_task(world(2))
-    loop.create_task(hello(1))
-    loop.run_until_complete(asyncio.sleep(3))
+    async def main():
+        asyncio.create_task(world(2))
+        asyncio.create_task(hello(delay=1))
+        await asyncio.sleep(3)
+
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass
 
 
 Can I use threads?
 ==================
 
 Yes, you can, but you must understand that the loops themselves are
-not thread safe. and you must be sure to know what is happening. You
-may want to create a loop in a new thread and make sure to pass it to
-the client:
+not thread safe. and you must be sure to know what is happening. The
+easiest and cleanest option is to use `asyncio.run` to create and manage
+the new event loop for you:
 
 .. code-block:: python
 
     import asyncio
     import threading
 
-    def go():
-        loop = asyncio.new_event_loop()
+    async def actual_work():
         client = TelegramClient(..., loop=loop)
-        ...
+        ...  # can use `await` here
+
+    def go():
+        asyncio.run(actual_work())
 
     threading.Thread(target=go).start()
 
@@ -248,9 +252,9 @@ You may have seen this error:
 
     RuntimeError: There is no current event loop in thread 'Thread-1'.
 
-It just means you didn't create a loop for that thread, and if you don't
-pass a loop when creating the client, it uses ``asyncio.get_event_loop()``,
-which only works in the main thread.
+It just means you didn't create a loop for that thread. Please refer to
+the ``asyncio`` documentation to correctly learn how to set the event loop
+for non-main threads.
 
 
 client.run_until_disconnected() blocks!
@@ -308,27 +312,26 @@ you can run requests in parallel:
 
     async def main():
         last, sent, download_path = await asyncio.gather(
-            client.get_messages('TelethonChat', 10),
-            client.send_message('TelethonOfftopic', 'Hey guys!'),
-            client.download_profile_photo('TelethonChat')
+            client.get_messages('telegram', 10),
+            client.send_message('me', 'Using asyncio!'),
+            client.download_profile_photo('telegram')
         )
 
     loop.run_until_complete(main())
 
 
-This code will get the 10 last messages from `@TelethonChat
-<https://t.me/TelethonChat>`_, send one to `@TelethonOfftopic
-<https://t.me/TelethonOfftopic>`_, and also download the profile
-photo of the main group. `asyncio` will run all these three tasks
-at the same time. You can run all the tasks you want this way.
+This code will get the 10 last messages from `@telegram
+<https://t.me/telegram>`_, send one to the chat with yourself, and also
+download the profile photo of the channel. `asyncio` will run all these
+three tasks at the same time. You can run all the tasks you want this way.
 
 A different way would be:
 
 .. code-block:: python
 
-    loop.create_task(client.get_messages('TelethonChat', 10))
-    loop.create_task(client.send_message('TelethonOfftopic', 'Hey guys!'))
-    loop.create_task(client.download_profile_photo('TelethonChat'))
+    loop.create_task(client.get_messages('telegram', 10))
+    loop.create_task(client.send_message('me', 'Using asyncio!'))
+    loop.create_task(client.download_profile_photo('telegram'))
 
 They will run in the background as long as the loop is running too.
 
@@ -360,6 +363,6 @@ Where can I read more?
 ======================
 
 `Check out my blog post
-<https://lonamiwebs.github.io/blog/asyncio/>`_ about `asyncio`, which
+<https://lonami.dev/blog/asyncio/>`_ about `asyncio`, which
 has some more examples and pictures to help you understand what happens
 when the loop runs.

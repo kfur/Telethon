@@ -21,7 +21,12 @@ class File:
     @property
     def id(self):
         """
-        The bot-API style ``file_id`` representing this file.
+        The old bot-API style ``file_id`` representing this file.
+
+        .. warning::
+
+            This feature has not been maintained for a long time and
+            may not work. It will be removed in future versions.
 
         .. note::
 
@@ -69,6 +74,9 @@ class File:
         """
         The width in pixels of this media if it's a photo or a video.
         """
+        if isinstance(self.media, types.Photo):
+            return max(getattr(s, 'w', 0) for s in self.media.sizes)
+
         return self._from_attr((
             types.DocumentAttributeImageSize, types.DocumentAttributeVideo), 'w')
 
@@ -77,6 +85,9 @@ class File:
         """
         The height in pixels of this media if it's a photo or a video.
         """
+        if isinstance(self.media, types.Photo):
+            return max(getattr(s, 'h', 0) for s in self.media.sizes)
+
         return self._from_attr((
            types.DocumentAttributeImageSize, types.DocumentAttributeVideo), 'h')
 
@@ -120,9 +131,11 @@ class File:
     def size(self):
         """
         The size in bytes of this file.
+
+        For photos, this is the heaviest thumbnail, as it often repressents the largest dimensions.
         """
         if isinstance(self.media, types.Photo):
-            return utils._photo_size_byte_count(self.media.sizes[-1])
+            return max(filter(None, map(utils._photo_size_byte_count, self.media.sizes)), default=None)
         elif isinstance(self.media, types.Document):
             return self.media.size
 

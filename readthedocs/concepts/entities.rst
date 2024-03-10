@@ -112,9 +112,9 @@ you're able to just do this:
     dialogs = await client.get_dialogs()
 
     # All of these work and do the same.
-    lonami = await client.get_entity('lonami')
-    lonami = await client.get_entity('t.me/lonami')
-    lonami = await client.get_entity('https://telegram.dog/lonami')
+    username = await client.get_entity('username')
+    username = await client.get_entity('t.me/username')
+    username = await client.get_entity('https://telegram.dog/username')
 
     # Other kind of entities.
     channel = await client.get_entity('telegram.me/joinchat/AAAAAEkk2WdoDrB4-Q8-gg')
@@ -142,7 +142,7 @@ you're able to just do this:
 All methods in the :ref:`telethon-client` call `.get_input_entity()
 <telethon.client.users.UserMethods.get_input_entity>` prior
 to sending the request to save you from the hassle of doing so manually.
-That way, convenience calls such as `client.send_message('lonami', 'hi!')
+That way, convenience calls such as `client.send_message('username', 'hi!')
 <telethon.client.messages.MessageMethods.send_message>`
 become possible.
 
@@ -178,7 +178,7 @@ exist, which just have the ID. You cannot get the hash out of them since
 you should not be needing it. The library probably has cached it before.
 
 Peers are enough to identify an entity, but they are not enough to make
-a request with them use them. You need to know their hash before you can
+a request with them. You need to know their hash before you can
 "use them", and to know the hash you need to "encounter" them, let it
 be in your dialogs, participants, message forwards, etc.
 
@@ -268,7 +268,7 @@ That means you can do this:
 .. code-block:: python
 
     message.user_id
-    await message.get_input_user()
+    await message.get_input_sender()
     message.user
     # ...etc
 
@@ -289,17 +289,17 @@ applications"? Now do the same with the library. Use what applies:
 
     # (These examples assume you are inside an "async def")
     async with client:
-        # Does it have an username? Use it!
+        # Does it have a username? Use it!
         entity = await client.get_entity(username)
 
         # Do you have a conversation open with them? Get dialogs.
         await client.get_dialogs()
 
         # Are they participant of some group? Get them.
-        await client.get_participants('TelethonChat')
+        await client.get_participants('username')
 
         # Is the entity the original sender of a forwarded message? Get it.
-        await client.get_messages('TelethonChat', 100)
+        await client.get_messages('username', 100)
 
         # NOW you can use the ID, anywhere!
         await client.send_message(123456, 'Hi!')

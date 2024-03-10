@@ -28,6 +28,9 @@ their own Telegram bots. Quoting their main page:
 Bot API is simply an HTTP endpoint which translates your requests to it into
 MTProto calls through tdlib_, their bot backend.
 
+Configuration of your bot, such as its available commands and auto-completion,
+is configured through `@BotFather <https://t.me/BotFather>`_.
+
 
 What is MTProto?
 ================
@@ -66,8 +69,8 @@ things, you will be able to easily login as a user and even keep your bot
 without having to learn a new library.
 
 If less overhead and full control didn't convince you to use Telethon yet,
-check out the repository `HTTP Bot API vs MTProto comparison`_ with a more
-exhaustive and up-to-date list of differences.
+check out the wiki page `MTProto vs HTTP Bot API`_ with a more exhaustive
+and up-to-date list of differences.
 
 
 Migrating from Bot API to Telethon
@@ -88,7 +91,7 @@ Next, we will see some examples from the most popular libraries.
 Migrating from python-telegram-bot
 ----------------------------------
 
-Let's take their `echobot2.py`_ example and shorten it a bit:
+Let's take their `echobot.py`_ example and shorten it a bit:
 
 .. code-block:: python
 
@@ -107,7 +110,7 @@ Let's take their `echobot2.py`_ example and shorten it a bit:
         updater = Updater("TOKEN")
         dp = updater.dispatcher
         dp.add_handler(CommandHandler("start", start))
-        dp.add_handler(MessageHandler(Filters.text, echo))
+        dp.add_handler(MessageHandler(Filters.text & ~Filters.command, echo))
 
         updater.start_polling()
 
@@ -145,7 +148,7 @@ After using Telethon:
 
 Key differences:
 
-* The recommended way to do it imports less things.
+* The recommended way to do it imports fewer things.
 * All handlers trigger by default, so we need ``events.StopPropagation``.
 * Adding handlers, responding and running is a lot less verbose.
 * Telethon needs ``async def`` and ``await``.
@@ -296,7 +299,7 @@ After rewriting:
 
     class Subbot(TelegramClient):
         def __init__(self, *a, **kw):
-            await super().__init__(*a, **kw)
+            super().__init__(*a, **kw)
             self.add_event_handler(self.on_update, events.NewMessage)
 
         async def connect():
@@ -323,11 +326,11 @@ Key differences:
 .. _Bot FAQ: https://core.telegram.org/bots/faq
 .. _tdlib: https://core.telegram.org/tdlib
 .. _MTProto: https://core.telegram.org/mtproto
-.. _HTTP Bot API vs MTProto comparison: https://github.com/telegram-mtproto/botapi-comparison
+.. _MTProto vs HTTP Bot API: https://github.com/LonamiWebs/Telethon/wiki/MTProto-vs-HTTP-Bot-API
 .. _requests: https://pypi.org/project/requests/
 .. _python-telegram-bot: https://python-telegram-bot.readthedocs.io
 .. _pyTelegramBotAPI: https://github.com/eternnoir/pyTelegramBotAPI
 .. _aiohttp: https://docs.aiohttp.org/en/stable
 .. _aiogram: https://aiogram.readthedocs.io
 .. _dumbot: https://github.com/Lonami/dumbot
-.. _echobot2.py: https://github.com/python-telegram-bot/python-telegram-bot/blob/master/examples/echobot2.py
+.. _echobot.py: https://github.com/python-telegram-bot/python-telegram-bot/blob/master/examples/echobot.py

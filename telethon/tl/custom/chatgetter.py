@@ -66,8 +66,9 @@ class ChatGetter(abc.ABC):
         """
         if self._input_chat is None and self._chat_peer and self._client:
             try:
-                self._input_chat = self._client._entity_cache[self._chat_peer]
-            except KeyError:
+                self._input_chat = self._client._mb_entity_cache.get(
+                        utils.get_peer_id(self._chat_peer, add_mark=False))._as_input_peer()
+            except AttributeError:
                 pass
 
         return self._input_chat
@@ -95,7 +96,7 @@ class ChatGetter(abc.ABC):
     def chat_id(self):
         """
         Returns the marked chat integer ID. Note that this value **will
-        be different** from ``to_id`` for incoming private messages, since
+        be different** from ``peer_id`` for incoming private messages, since
         the chat *to* which the messages go is to your own person, but
         the *chat* itself is with the one who sent the message.
 

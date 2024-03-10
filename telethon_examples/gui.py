@@ -53,7 +53,7 @@ def callback(func):
     def wrapped(*args, **kwargs):
         result = func(*args, **kwargs)
         if inspect.iscoroutine(result):
-            aio_loop.create_task(result)
+            asyncio.create_task(result)
 
     return wrapped
 
@@ -341,8 +341,8 @@ class App(tkinter.Tk):
             self.chat.configure(bg='yellow')
 
 
-async def main(loop, interval=0.05):
-    client = TelegramClient(SESSION, API_ID, API_HASH, loop=loop)
+async def main(interval=0.05):
+    client = TelegramClient(SESSION, API_ID, API_HASH)
     try:
         await client.connect()
     except Exception as e:
@@ -369,10 +369,4 @@ async def main(loop, interval=0.05):
 
 
 if __name__ == "__main__":
-    # Some boilerplate code to set up the main method
-    aio_loop = asyncio.get_event_loop()
-    try:
-        aio_loop.run_until_complete(main(aio_loop))
-    finally:
-        if not aio_loop.is_closed():
-            aio_loop.close()
+    asyncio.run(main())

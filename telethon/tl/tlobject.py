@@ -15,7 +15,11 @@ def _datetime_to_timestamp(dt):
         dt = dt.replace(tzinfo=timezone.utc)
     # We use .total_seconds() method instead of simply dt.timestamp(), 
     # because on Windows the latter raises OSError on datetimes ~< datetime(1970,1,1)
-    return int((dt - _EPOCH).total_seconds())
+    secs = int((dt - _EPOCH).total_seconds())
+    # Make sure it's a valid signed 32 bit integer, as used by Telegram.
+    # This does make very large dates wrap around, but it's the best we
+    # can do with Telegram's limitations.
+    return struct.unpack('i', struct.pack('I', secs & 0xffffffff))[0]
 
 
 def _json_default(value):
@@ -218,6 +222,19 @@ class TLObject:
             return json.dumps(d, default=default, **kwargs)
 
     def __bytes__(self):
+        try:
+            return self._bytes()
+        except AttributeError:
+            # If a type is wrong (e.g. expected `TLObject` but `int` was
+            # provided) it will try to access `._bytes()`, which will fail
+            # with `AttributeError`. This occurs in fact because the type
+            # was wrong, so raise the correct error type.
+            raise TypeError('a TLObject was expected but found something else')
+
+    # Custom objects will call `(...)._bytes()` and not `bytes(...)` so that
+    # if the wrong type is used (e.g. `int`) we won't try allocating a huge
+    # amount of data, which would cause a `MemoryError`.
+    def _bytes(self):
         raise NotImplementedError
 
     @classmethod

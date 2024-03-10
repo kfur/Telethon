@@ -99,7 +99,7 @@ You will still need an API ID and hash, but the process is very similar:
 
     api_id = 12345
     api_hash = '0123456789abcdef0123456789abcdef'
-    bot_token = '12345:0123456789abcdef0123456789abcdef
+    bot_token = '12345:0123456789abcdef0123456789abcdef'
 
     # We have to manually call "start" if we want an explicit bot token
     bot = TelegramClient('bot', api_id, api_hash).start(bot_token=bot_token)
@@ -117,7 +117,12 @@ Signing In behind a Proxy
 =========================
 
 If you need to use a proxy to access Telegram,
-you will need to  `install PySocks`__ and then change:
+you will need to either:
+
+* For Python >= 3.6 : `install python-socks[asyncio]`__
+* For Python <= 3.5 : `install PySocks`__
+
+and then change
 
 .. code-block:: python
 
@@ -127,13 +132,48 @@ with
 
 .. code-block:: python
 
-    TelegramClient('anon', api_id, api_hash, proxy=(socks.SOCKS5, '127.0.0.1', 4444))
+    TelegramClient('anon', api_id, api_hash, proxy=("socks5", '127.0.0.1', 4444))
 
-(of course, replacing the IP and port with the IP and port of the proxy).
+(of course, replacing the protocol, IP and port with the protocol, IP and port of the proxy).
 
-The ``proxy=`` argument should be a tuple, a list or a dict,
+The ``proxy=`` argument should be a dict (or tuple, for backwards compatibility),
 consisting of parameters described `in PySocks usage`__.
 
+The allowed values for the argument ``proxy_type`` are:
+
+* For Python <= 3.5:
+    * ``socks.SOCKS5`` or ``'socks5'``
+    * ``socks.SOCKS4`` or ``'socks4'``
+    * ``socks.HTTP`` or ``'http'``
+
+* For Python >= 3.6:
+    * All of the above
+    * ``python_socks.ProxyType.SOCKS5``
+    * ``python_socks.ProxyType.SOCKS4``
+    * ``python_socks.ProxyType.HTTP``
+
+
+Example:
+
+.. code-block:: python
+
+    proxy = {
+        'proxy_type': 'socks5', # (mandatory) protocol to use (see above)
+        'addr': '1.1.1.1',      # (mandatory) proxy IP address
+        'port': 5555,           # (mandatory) proxy port number
+        'username': 'foo',      # (optional) username if the proxy requires auth
+        'password': 'bar',      # (optional) password if the proxy requires auth
+        'rdns': True            # (optional) whether to use remote or local resolve, default remote
+    }
+
+For backwards compatibility with ``PySocks`` the following format
+is possible (but discouraged):
+
+.. code-block:: python
+
+    proxy = (socks.SOCKS5, '1.1.1.1', 5555, True, 'foo', 'bar')
+
+.. __: https://github.com/romis2012/python-socks#installation
 .. __: https://github.com/Anorov/PySocks#installation
 .. __: https://github.com/Anorov/PySocks#usage-1
 

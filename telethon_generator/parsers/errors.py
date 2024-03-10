@@ -27,6 +27,12 @@ def _get_class_name(error_code):
             abs(error_code), 'RPCError' + str(error_code).replace('-', 'Neg')
         )
 
+    if error_code.startswith('2'):
+        error_code = re.sub(r'2', 'TWO_', error_code, count=1)
+
+    if re.match(r'\d+', error_code):
+        raise RuntimeError('error code starting with a digit cannot have valid Python name: {}'.format(error_code))
+
     return snake_to_camel_case(
         error_code.replace('FIRSTNAME', 'FIRST_NAME')\
                   .replace('SLOWMODE', 'SLOW_MODE').lower(), suffix='Error')
@@ -38,6 +44,7 @@ class Error:
         # Should these be split into different files or doesn't really matter?
         # Telegram isn't exactly consistent with returned errors anyway.
         self.int_code = codes[0]
+        self.int_codes = codes
         self.str_code = name
         self.subclass = _get_class_name(codes[0])
         self.subclass_exists = abs(codes[0]) in KNOWN_BASE_CLASSES
@@ -45,7 +52,7 @@ class Error:
 
         self.has_captures = '_X' in name
         if self.has_captures:
-            self.name = _get_class_name(name.replace('_X', ''))
+            self.name = _get_class_name(name.replace('_X', '_'))
             self.pattern = name.replace('_X', r'_(\d+)')
             self.capture_name = re.search(r'{(\w+)}', description).group(1)
         else:

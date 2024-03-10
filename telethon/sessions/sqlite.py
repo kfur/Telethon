@@ -1,7 +1,8 @@
 import datetime
 import os
+import time
 
-from telethon.tl import types
+from ..tl import types
 from .memory import MemorySession, _SentFileType
 from .. import utils
 from ..crypto import AuthKey
@@ -17,7 +18,7 @@ except ImportError as e:
     sqlite3_err = type(e)
 
 EXTENSION = '.session'
-CURRENT_VERSION = 6  # database version
+CURRENT_VERSION = 7  # database version
 
 
 class SQLiteSession(MemorySession):
@@ -84,7 +85,8 @@ class SQLiteSession(MemorySession):
                     hash integer not null,
                     username text,
                     phone integer,
-                    name text
+                    name text,
+                    date integer
                 )"""
                 ,
                 """sent_files (
@@ -148,6 +150,9 @@ class SQLiteSession(MemorySession):
             # hashes for User and Channel are wrong, so drop them off.
             old += 1
             c.execute('delete from entities')
+        if old == 6:
+            old += 1
+            c.execute("alter table entities add column date integer")
 
         c.close()
 
@@ -210,6 +215,20 @@ class SQLiteSession(MemorySession):
                       entity_id, state.pts, state.qts,
                       state.date.timestamp(), state.seq)
 
+    def get_update_states(self):
+        c = self._cursor()
+        try:
+            rows = c.execute('select id, pts, qts, date, seq from update_state').fetchall()
+            return ((row[0], types.updates.State(
+                pts=row[1],
+                qts=row[2],
+                date=datetime.datetime.fromtimestamp(row[3], tz=datetime.timezone.utc),
+                seq=row[4],
+                unread_count=0)
+            ) for row in rows)
+        finally:
+            c.close()
+
     def save(self):
         """Saves the current session object as session_user_id.session"""
         # This is a no-op if there are no changes to commit, so there's
@@ -264,10 +283,9 @@ class SQLiteSession(MemorySession):
     # Entity processing
 
     def process_entities(self, tlo):
-        """Processes all the found entities on the given TLObject,
-           unless .enabled is False.
-
-           Returns True if new input entities were added.
+        """
+        Processes all the found entities on the given TLObject,
+        unless .save_entities is False.
         """
         if not self.save_entities:
             return
@@ -278,8 +296,10 @@ class SQLiteSession(MemorySession):
 
         c = self._cursor()
         try:
+            now_tup = (int(time.time()),)
+            rows = [row + now_tup for row in rows]
             c.executemany(
-                'insert or replace into entities values (?,?,?,?,?)', rows)
+                'insert or replace into entities values (?,?,?,?,?,?)', rows)
         finally:
             c.close()
 
@@ -288,8 +308,25 @@ class SQLiteSession(MemorySession):
             'select id, hash from entities where phone = ?', phone)
 
     def get_entity_rows_by_username(self, username):
-        return self._execute(
-            'select id, hash from entities where username = ?', username)
+        c = self._cursor()
+        try:
+            results = c.execute(
+                'select id, hash, date from entities where username = ?',
+                (username,)
+            ).fetchall()
+
+            if not results:
+                return None
+
+            # If there is more than one result for the same username, evict the oldest one
+            if len(results) > 1:
+                results.sort(key=lambda t: t[2] or 0)
+                c.executemany('update entities set username = null where id = ?',
+                              [(t[0],) for t in results[:-1]])
+
+            return results[-1][0], results[-1][1]
+        finally:
+            c.close()
 
     def get_entity_rows_by_name(self, name):
         return self._execute(

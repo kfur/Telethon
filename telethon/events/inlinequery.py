@@ -4,7 +4,7 @@ import re
 import asyncio
 
 from .common import EventBuilder, EventCommon, name_inner_event
-from .. import utils
+from .. import utils, helpers
 from ..tl import types, functions, custom
 from ..tl.custom.sendergetter import SenderGetter
 
@@ -31,6 +31,21 @@ class InlineQuery(EventBuilder):
             You can specify a regex-like string which will be matched
             against the message, a callable function that returns `True`
             if a message is acceptable, or a compiled regex pattern.
+
+    Example
+        .. code-block:: python
+
+            from telethon import events
+
+            @client.on(events.InlineQuery)
+            async def handler(event):
+                builder = event.builder
+
+                # Two options (convert user text to UPPERCASE or lowercase)
+                await event.answer([
+                    builder.article('UPPERCASE', text=event.text.upper()),
+                    builder.article('lowercase', text=event.text.lower()),
+                ])
     """
     def __init__(
             self, users=None, *, blacklist_users=False, func=None, pattern=None):
@@ -64,11 +79,11 @@ class InlineQuery(EventBuilder):
         Represents the event of a new callback query.
 
         Members:
-            query (:tl:`UpdateBotCallbackQuery`):
-                The original :tl:`UpdateBotCallbackQuery`.
+            query (:tl:`UpdateBotInlineQuery`):
+                The original :tl:`UpdateBotInlineQuery`.
 
-                Make sure to access the `text` of the query if
-                that's what you want instead working with this.
+                Make sure to access the `text` property of the query if
+                you want the text rather than the actual query object.
 
             pattern_match (`obj`, optional):
                 The resulting object from calling the passed ``pattern``
@@ -84,7 +99,7 @@ class InlineQuery(EventBuilder):
         def _set_client(self, client):
             super()._set_client(client)
             self._sender, self._input_sender = utils._get_entity_pair(
-                self.sender_id, self._entities, client._entity_cache)
+                self.sender_id, self._entities, client._mb_entity_cache)
 
         @property
         def id(self):
@@ -115,7 +130,7 @@ class InlineQuery(EventBuilder):
             and the user's device is able to send it, this will return
             the :tl:`GeoPoint` with the position of the user.
             """
-            return
+            return self.query.geo
 
         @property
         def builder(self):
@@ -131,6 +146,9 @@ class InlineQuery(EventBuilder):
                 switch_pm=None, switch_pm_param=''):
             """
             Answers the inline query with the given results.
+
+            See the documentation for `builder` to know what kind of answers
+            can be given.
 
             Args:
                 results (`list`, optional):
@@ -191,8 +209,7 @@ class InlineQuery(EventBuilder):
                 return
 
             if results:
-                futures = [self._as_future(x, self._client.loop)
-                           for x in results]
+                futures = [self._as_future(x) for x in results]
 
                 await asyncio.wait(futures)
 
@@ -221,10 +238,10 @@ class InlineQuery(EventBuilder):
             )
 
         @staticmethod
-        def _as_future(obj, loop):
+        def _as_future(obj):
             if inspect.isawaitable(obj):
-                return asyncio.ensure_future(obj, loop=loop)
+                return asyncio.ensure_future(obj)
 
-            f = loop.create_future()
+            f = helpers.get_running_loop().create_future()
             f.set_result(obj)
             return f

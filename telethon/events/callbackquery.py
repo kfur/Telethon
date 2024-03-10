@@ -31,6 +31,29 @@ class CallbackQuery(EventBuilder):
             against the payload data, a callable function that returns `True`
             if a the payload data is acceptable, or a compiled regex pattern.
 
+    Example
+        .. code-block:: python
+
+            from telethon import events, Button
+
+            # Handle all callback queries and check data inside the handler
+            @client.on(events.CallbackQuery)
+            async def handler(event):
+                if event.data == b'yes':
+                    await event.answer('Correct answer!')
+
+            # Handle only callback queries with data being b'no'
+            @client.on(events.CallbackQuery(data=b'no'))
+            async def handler(event):
+                # Pop-up message with alert
+                await event.answer('Wrong answer!', alert=True)
+
+            # Send a message with buttons users can click
+            async def main():
+                await client.send_message(user, 'Yes or no?', buttons=[
+                    Button.inline('Yes!', b'yes'),
+                    Button.inline('Nope', b'no')
+                ])
     """
     def __init__(
             self, chats=None, *, blacklist_chats=False, func=None, data=None, pattern=None):
@@ -95,8 +118,10 @@ class CallbackQuery(EventBuilder):
             elif event.query.data != self.match:
                 return
 
-        if not self.func or self.func(event):
-            return event
+        if self.func:
+            # Return the result of func directly as it may need to be awaited
+            return self.func(event)
+        return True
 
     class Event(EventCommon, SenderGetter):
         """
@@ -110,7 +135,7 @@ class CallbackQuery(EventBuilder):
                 The object returned by the ``data=`` parameter
                 when creating the event builder, if any. Similar
                 to ``pattern_match`` for the new message event.
-            
+
             pattern_match (`obj`, optional):
                 Alias for ``data_match``.
         """
@@ -126,7 +151,7 @@ class CallbackQuery(EventBuilder):
         def _set_client(self, client):
             super()._set_client(client)
             self._sender, self._input_sender = utils._get_entity_pair(
-                self.sender_id, self._entities, client._entity_cache)
+                self.sender_id, self._entities, client._mb_entity_cache)
 
         @property
         def id(self):
@@ -183,8 +208,9 @@ class CallbackQuery(EventBuilder):
             if not getattr(self._input_sender, 'access_hash', True):
                 # getattr with True to handle the InputPeerSelf() case
                 try:
-                    self._input_sender = self._client._entity_cache[self._sender_id]
-                except KeyError:
+                    self._input_sender = self._client._mb_entity_cache.get(
+                        utils.resolve_id(self._sender_id)[0])._as_input_peer()
+                except AttributeError:
                     m = await self.get_message()
                     if m:
                         self._sender = m._sender
@@ -274,7 +300,7 @@ class CallbackQuery(EventBuilder):
             """
             Edits the message. Shorthand for
             `telethon.client.messages.MessageMethods.edit_message` with
-            the ``entity`` set to the correct :tl:`InputBotInlineMessageID`.
+            the ``entity`` set to the correct :tl:`InputBotInlineMessageID` or :tl:`InputBotInlineMessageID64`.
 
             Returns `True` if the edit was successful.
 
@@ -287,7 +313,7 @@ class CallbackQuery(EventBuilder):
                 since the message object is normally not present.
             """
             self._client.loop.create_task(self.answer())
-            if isinstance(self.query.msg_id, types.InputBotInlineMessageID):
+            if isinstance(self.query.msg_id, (types.InputBotInlineMessageID, types.InputBotInlineMessageID64)):
                 return await self._client.edit_message(
                     self.query.msg_id, *args, **kwargs
                 )
@@ -312,6 +338,8 @@ class CallbackQuery(EventBuilder):
             This method will likely fail if `via_inline` is `True`.
             """
             self._client.loop.create_task(self.answer())
+            if isinstance(self.query.msg_id, (types.InputBotInlineMessageID, types.InputBotInlineMessageID64)):
+                raise TypeError('Inline messages cannot be deleted as there is no API request available to do so')
             return await self._client.delete_messages(
                 await self.get_input_chat(), [self.query.msg_id],
                 *args, **kwargs

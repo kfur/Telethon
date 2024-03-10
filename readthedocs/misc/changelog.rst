@@ -13,6 +13,1023 @@ it can take advantage of new goodies!
 
 .. contents:: List of All Versions
 
+New layer (v1.34)
+=================
+
++------------------------+
+| Scheme layer used: 173 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=167&to=173>`__.
+
+Additions
+~~~~~~~~~~~~
+
+* ``reply_to_chat`` and ``reply_to_sender`` are now in ``Message``.
+  This is useful when you lack access to the chat, but Telegram still included some basic information.
+
+Bug fixes
+~~~~~~~~~
+
+* ``parse_mode`` with a custom instance containing both ``parse`` and ``unparse`` should now work.
+* Parsing and unparsing message entities should now behave better in certain corner-cases.
+
+
+New layer (v1.33)
+=================
+
++------------------------+
+| Scheme layer used: 167 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=166&to=167>`__.
+
+Enhancements
+~~~~~~~~~~~~
+
+* ``webbrowser`` is now imported conditionally, to support niche environments.
+* Library should now retry on the suddenly-common ``TimedOutError``.
+
+Bug fixes
+~~~~~~~~~
+
+* Sending photos which were automatically resized should work again (included in the v1.32 series).
+
+
+New layer (v1.32)
+=================
+
++------------------------+
+| Scheme layer used: 166 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=165&to=166>`__.
+
+This enables you to use custom languages in preformatted blocks using HTML:
+
+.. code-block:: html
+
+  <pre>
+    <code class='language-python'>from telethon import TelegramClient</code>
+  </pre>
+
+Note that Telethon v1's markdown is a custom format and won't support language tags.
+If you want to set a custom language, you have to use HTML or a custom formatter.
+
+
+Dropped imghdr support (v1.31)
+==============================
+
++------------------------+
+| Scheme layer used: 165 |
++------------------------+
+
+This release contains a breaking change in preparation for Python 3.12.
+If you were sending photos from in-memory ``bytes`` or ``BytesIO`` containing images,
+you should now use ``BytesIO`` and set the ``.name`` property to a dummy name.
+This will allow Telethon to detect the correct extension (and file type).
+
+.. code-block:: python
+
+    # before
+    image_data = b'...'
+    client.send_file(chat, image_data)
+
+    # after
+    from io import BytesIO
+    image_data = BytesIO(b'...')
+    image_data.name = 'a.jpg'  # any name, only the extension matters
+    client.send_file(chat, image_data)
+
+
+Bug fixes
+~~~~~~~~~
+
+* Code generation wasn't working under PyPy.
+* Obtaining markdown or HTML from message text could produce unexpected results sometimes.
+* Other fixes for bugs from the previous version, which were already fixed in patch versions.
+
+Breaking Changes
+~~~~~~~~~~~~~~~~
+
+* ``imghdr`` is deprecated in newer Python versions, so Telethon no longer uses it.
+  This means there might be some cases where Telethon fails to infer the file extension for buffers containing images.
+  If you were relying on this, add ``.name = 'a.jpg'`` (or other extension) to the ``BytesIO`` buffers you upload.
+
+Layer bump and small changes (v1.30)
+====================================
+
++------------------------+
+| Scheme layer used: 162 |
++------------------------+
+
+Some of the bug fixes were already present in patch versions of ``v1.29``, but
+the new layer necessitated a minor bump.
+
+Enhancements
+~~~~~~~~~~~~
+
+* Removed client-side checks for editing messages.
+  This only affects ``Message.edit``, as ``client.edit_message`` already had
+  no checks.
+* Library should not understand more server-side errors during update handling
+  which should reduce crashes.
+* Client-side image compression should behave better now.
+
+Bug fixes
+~~~~~~~~~
+
+* Some updates such as ``UpdateChatParticipant`` were being missed due to the
+  order in which Telegram sent them. The library now more carefully checks for
+  the sequence and pts contained in them to avoid dropping them.
+* Fixed ``is_inline`` check for :tl:`KeyboardButtonWebView`.
+* Fixed some issues getting entity from cache by ID.
+* ``reply_to`` should now work when sending albums.
+
+
+More bug fixing (v1.29)
+=======================
+
++------------------------+
+| Scheme layer used: 160 |
++------------------------+
+
+This layer introduces the necessary raw API methods to work with stories.
+
+The library is aiming to be "feature-frozen" for as long as v1 is active,
+so friendly client methods are not implemented, but example code to use
+stories can be found in the GitHub wiki of the project.
+
+Enhancements
+~~~~~~~~~~~~
+
+* Removed client-side checks for methods dealing with chat permissions.
+  In particular, this means you can now ban channels.
+* Improved some error messages and added new classes for more RPC errors.
+* The client-side check for valid usernames has been loosened, so that
+  very short premium usernames are no longer considered invalid.
+
+Bug fixes
+~~~~~~~~~
+
+* Attempting to download a thumbnail from documnets without one would fail,
+  rather than do nothing (since nothing can be downloaded if there is no thumb).
+* More errors are caught in the update handling loop.
+* HTML ``.text`` should now "unparse" any message contents correctly.
+* Fixed some problems related to logging.
+* ``comment_to`` should now work as expected with albums.
+* ``asyncio.CancelledError`` should now correctly propagate from the update loop.
+* Removed some absolute imports in favour of relative imports.
+* ``UserUpdate.last_seen`` should now behave correctly.
+* Fixed a rare ``ValueError`` during ``connect`` if the session cache was bad.
+
+
+New Layer and housekeeping (v1.28)
+==================================
+
++------------------------+
+| Scheme layer used: 155 |
++------------------------+
+
+Plenty of stale issues closed, as well as improvements for some others.
+
+Additions
+~~~~~~~~~
+
+* New ``entity_cache_limit`` parameter in the ``TelegramClient`` constructor.
+  This should help a bit in keeping memory usage in check.
+
+Enhancements
+~~~~~~~~~~~~
+
+* ``progress_callback`` is now called when dealing with albums. See the
+  documentation on `client.send_file() <telethon.client.uploads.UploadMethods.send_file>`
+  for details.
+* Update state and entities are now periodically saved, so that the information
+  isn't lost in the case of crash or unexpected script terminations. You should
+  still be calling ``disconnect`` or using the context-manager, though.
+* The client should no longer unnecessarily call ``get_me`` every time it's started.
+
+Bug fixes
+~~~~~~~~~
+
+* Messages obtained via raw API could not be used in ``forward_messages``.
+* ``force_sms`` and ``sign_up`` have been deprecated. See `issue 4050`_ for details.
+  It is no longer possible for third-party applications, such as those made with
+  Telethon, to use those features.
+* ``events.ChatAction`` should now work in more cases in groups with hidden members.
+* Errors that occur at the connection level should now be properly propagated, so that
+  you can actually have a chance to handle them.
+* Update handling should be more resilient.
+* ``PhoneCodeExpiredError`` will correctly clear the stored hash if it occurs in ``sign_in``.
+* In patch ``v1.28.2``, :tl:`InputBotInlineMessageID64` can now be used
+  to edit inline messages.
+
+
+.. _issue 4050: https://github.com/LonamiWebs/Telethon/issues/4050
+
+
+New Layer and some Bug fixes (v1.27)
+====================================
+
++------------------------+
+| Scheme layer used: 152 |
++------------------------+
+
+Bug fixes
+~~~~~~~~~
+
+* When the account is logged-out, the library should now correctly propagate
+  an error through ``run_until_disconnected`` to let you handle it.
+* The library no longer uses ``asyncio.get_event_loop()`` in newer Python
+  versions, which should get rid of some deprecation warnings.
+* It could happen that bots would receive messages sent by themselves,
+  very often right after they deleted a message. This should happen far
+  less often now (but might still happen with unlucky timings).
+* Maximum photo size for automatic image resizing is now larger.
+* The initial request is now correctly wrapped in ``invokeWithoutUpdates``
+  when updates are disabled after constructing the client instance.
+* Using a ``pathlib.Path`` to download contacts and web documents should
+  now work correctly.
+
+New Layer and some Bug fixes (v1.26)
+====================================
+
++------------------------+
+| Scheme layer used: 149 |
++------------------------+
+
+This new layer includes things such as emoji status, more admin log events,
+forum topics and message reactions, among other things. You can access these
+using raw API. It also contains a few bug fixes.
+
+These were fixed in the v1.25 series:
+
+* ``client.edit_admin`` did not work on small group chats.
+* ``client.get_messages`` could stop early in some channels.
+* ``client.download_profile_photo`` now should work even if ``User.min``.
+* ``client.disconnect`` should no longer hang when being called from within
+  an event handlers.
+* ``client.get_dialogs`` now initializes the update state for channels.
+* The message sender should not need to be fetched in more cases.
+* Lowered the severity of some log messages to be less spammy.
+
+These are new to v1.26.0:
+
+* Layer update.
+* New documented RPC errors.
+* Sometimes the first message update to a channel could be missed if said
+  message was read immediately.
+* ``client.get_dialogs`` would fail when the total count evenly divided
+  the chunk size of 100.
+* ``client.get_messages`` could get stuck during a global search.
+* Potentially fixed some issues when sending certain videos.
+* Update handling should be more resilient.
+* The client should handle having its auth key destroyed more gracefully.
+* Fixed some issues when logging certain messages.
+
+
+Bug fixes (v1.25.1)
+===================
+
+This version should fix some of the problems that came with the revamped
+update handling.
+
+* Some inline URLs were not parsing correctly with markdown.
+* ``events.Raw`` was handling :tl:`UpdateShort` which it shouldn't do.
+* ``events.Album`` should now work again.
+* ``CancelledError`` was being incorrectly logged as a fatal error.
+* Some fixes to update handling primarly aimed for bot accounts.
+* Update handling now can deal with more errors without crashing.
+* Unhandled errors from update handling will now be propagated through
+  ``client.run_until_disconnected``.
+* Invite links with ``+`` are now recognized.
+* Added new known RPC errors.
+* ``telethon.types`` could not be used as a module.
+* 0-length message entities are now stripped to avoid errors.
+* ``client.send_message`` was not returning a message with ``reply_to``
+  in some cases.
+* ``aggressive`` in ``client.iter_participants`` now does nothing (it did
+  not really work anymore anyway, and this should prevent other errors).
+* ``client.iter_participants`` was failing in some groups.
+* Text with HTML URLs could sometimes fail to parse.
+* Added a hard timeout during disconnect in order to prevent the program
+  from freezing.
+
+Please be sure to report issues with update handling if you still encounter
+some errors!
+
+
+Update handling overhaul (v1.25)
+================================
+
++------------------------+
+| Scheme layer used: 144 |
++------------------------+
+
+I had plans to release v2 way earlier, but my motivation drained off, so that
+didn't happen. The reason for another v1 release is that there was a clear
+need to fix some things regarding update handling (which were present in v2).
+I did not want to make this release. But with the release date for v2 still
+being unclear, I find it necessary to release another v1 version. I apologize
+for the delay (I should've done this a lot sooner but didn't because in my
+head I would've pushed through and finished v2, but I underestimated how much
+work that was and I probably experienced burn-out).
+
+I still don't intend to make new additions to the v1 series (beyond updating
+the Telegram layer being used). I still have plans to finish v2 some day.
+But in the meantime, new features, such as reactions, will have to be used
+through raw API.
+
+This update also backports the update overhaul from v2. If you experience
+issues with updates, please report them on the GitHub page for the project.
+However, this new update handling should be more reliable, and ``catch_up``
+should actually work properly.
+
+Breaking Changes
+~~~~~~~~~~~~~~~~
+
+* In order for ``catch_up`` to work (new flag in the ``TelegramClient``
+  constructor), sessions need to impleemnt the new ``get_update_states``.
+  Third-party session storages won't have this implemented by the time
+  this version released, so ``catch_up`` may not work with those.
+
+Rushed release to fix login (v1.24)
+===================================
+
++------------------------+
+| Scheme layer used: 133 |
++------------------------+
+
+This is a rushed release. It contains a layer recent enough to not fail with
+``UPDATE_APP_TO_LOGIN``, but still not the latest, to avoid breaking more
+than necessary.
+
+Breaking Changes
+~~~~~~~~~~~~~~~~
+
+* The biggest change is user identifiers (and chat identifiers, and others)
+  **now use up to 64 bits**, rather than 32. If you were storing them in some
+  storage with fixed size, you may need to update (such as database tables
+  storing only integers).
+
+There have been other changes which I currently don't have the time to document.
+You can refer to the following link to see them early:
+https://github.com/LonamiWebs/Telethon/compare/v1.23.0...v1.24.0
+
+
+New schema and bug fixes (v1.23)
+================================
+
++------------------------+
+| Scheme layer used: 130 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=129&to=130>`__.
+
+Enhancements
+~~~~~~~~~~~~
+
+* `client.pin_message() <telethon.client.messages.MessageMethods.pin_message>`
+  can now pin on a single side in PMs.
+* Iterating participants should now be less expensive floodwait-wise.
+
+Bug fixes
+~~~~~~~~~
+
+* The QR login URL was being encoded incorrectly.
+* ``force_document`` was being ignored in inline queries for document.
+* ``manage_call`` permission was accidentally set to ``True`` by default.
+
+New schema and bug fixes (v1.22)
+================================
+
++------------------------+
+| Scheme layer used: 129 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=125&to=129>`__.
+
+Enhancements
+~~~~~~~~~~~~
+
+* You can now specify a message in `client.get_stats()
+  <telethon.client.chats.ChatMethods.get_stats>`.
+* Metadata extraction from audio files with ``hachoir`` now recognises "artist".
+* Get default chat permissions by not supplying a user to `client.get_permissions()
+  <telethon.client.chats.ChatMethods.get_permissions>`.
+* You may now use ``thumb`` when editing messages.
+
+Bug fixes
+~~~~~~~~~
+
+* Fixes regarding bot markup in messages.
+* Gracefully handle :tl:`ChannelForbidden` in ``get_sender``.
+
+And from v1.21.1:
+
+* ``file.width`` and ``.height`` was not working correctly in photos.
+* Raw API was mis-interpreting ``False`` values on boolean flag parameters.
+
+New schema and QoL improvements (v1.21)
+=======================================
+
++------------------------+
+| Scheme layer used: 125 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=124&to=125>`__.
+
+Not many changes in this release, mostly the layer change. Lately quite a few
+people have been reporting `TypeNotFoundError`, which occurs when the server
+**sends types that it shouldn't**. This can happen when Telegram decides to
+add a new, incomplete layer, and then they change the layer without bumping
+the layer number (so some constructor IDs no longer match and the error
+occurs). This layer change
+`should fix it <https://github.com/LonamiWebs/Telethon/issues/1724>`__.
+
+Additions
+~~~~~~~~~
+
+* `Message.click() <telethon.tl.custom.message.Message.click>` now supports
+  a ``password`` parameter, needed when doing things like changing the owner
+  of a bot via `@BotFather <https://t.me/BotFather>`__.
+
+Enhancements
+~~~~~~~~~~~~
+
+* ``tgcrypto`` will now be used for encryption when installed.
+
+Bug fixes
+~~~~~~~~~
+
+* `Message.edit <telethon.tl.custom.message.Message.edit>` wasn't working in
+  your own chat on events other than ``NewMessage``.
+* `client.delete_dialog() <telethon.client.dialogs.DialogMethods.delete_dialog>`
+  was not working on chats.
+* ``events.UserUpdate`` should now handle channels' typing status.
+* :tl:`InputNotifyPeer` auto-cast should now work on other ``TLObject``.
+* For some objects, ``False`` was not correctly serialized.
+
+
+New schema and QoL improvements (v1.20)
+=======================================
+
++------------------------+
+| Scheme layer used: 124 |
++------------------------+
+
+`View new and changed raw API methods <https://diff.telethon.dev/?from=122&to=124>`__.
+
+A bit late to the party, but Telethon now offers a convenient way to comment
+on channel posts. It works very similar to ``reply_to``:
+
+.. code-block:: python
+
+    client.send_message(channel, 'Great update!', comment_to=1134)
+
+This code will leave a comment to the channel post with ID ``1134`` in
+``channel``.
+
+In addition, the library now logs warning or error messages to ``stderr`` by
+default! You no longer should be left wondering "why isn't my event handler
+working" if you forgot to configure logging. It took so long for this change
+to arrive because nobody noticed that Telethon was using a
+``logging.NullHandler`` when it really shouldn't have.
+
+If you want the old behaviour of no messages being logged, you can configure
+`logging` to ``CRITICAL`` severity:
+
+.. code-block:: python
+
+    import logging
+    logging.basicConfig(level=logging.CRITICAL)
+
+This is not considered a breaking change because ``stderr`` should only be
+used for logging purposes, not to emit information others may consume (use
+``stdout`` for that).
+
+Additions
+~~~~~~~~~
+
+* New ``comment_to`` parameter in `client.send_message()
+  <telethon.client.messages.MessageMethods.send_message>`, and
+  `client.send_file() <telethon.client.uploads.UploadMethods.send_file>`
+  to comment on channel posts.
+
+Enhancements
+~~~~~~~~~~~~
+
+* ``utils.resolve_invite_link`` handles the newer link format.
+* Downloading files now retries once on `TimeoutError`, which has been
+  happening recently. It is not guaranteed to work, but it should help.
+* Sending albums of photo URLs is now supported.
+* EXIF metadata is respected when automatically resizing photos, so the
+  orientation information should no longer be lost.
+* Downloading a thumbnail by index should now use the correct size ordering.
+
+Bug fixes
+~~~~~~~~~
+
+* Fixed a `KeyError` on certain cases with ``Conversation``.
+* Thumbnails should properly render on more clients. Installing ``hachoir``
+  may help.
+* Message search was broken when using a certain combination of parameters.
+* ``utils.resolve_id`` was misbehaving with some identifiers.
+* Fix ``TypeNotFoundError`` was not being propagated, causing deadlocks.
+* Invoking multiple requests at once with ``ordered=True`` was deadlocking.
+
+
+New raw API call methods (v1.19)
+================================
+
++------------------------+
+| Scheme layer used: 122 |
++------------------------+
+
+Telegram has had group calls for some weeks now. This new version contains the
+raw API methods needed to initiate and manage these group calls, however, the
+library will likely **not offer ways to stream audio directly**.
+
+Telethon's focus is being an asyncio-based, pure-Python implementation to
+interact with Telegram's API. Streaming audio is beyond the current scope of
+the project and would be a big undertaking.
+
+However, that doesn't mean calls are not possible with Telethon. If you want
+to help design a Python library to perform audio calls, which can then be used
+with Telethon (so you can use Telethon + that new library to perform calls
+with Telethon), please refer to `@pytgcallschat <https://t.me/pytgcallschat/>`__
+and join the relevant chat to discuss and help with the implementation!
+
+The above message was also `posted in the official Telegram group
+<https://t.me/TelethonChat/284717>`__, if you wish to discuss it further.
+
+With that out of the way, let's list the additions and bug fixes in this
+release:
+
+Additions
+~~~~~~~~~
+
+* New ``has_left`` property for user permissions on `client.get_permissions()
+  <telethon.client.chats.ChatMethods.get_permissions>`.
+
+Enhancements
+~~~~~~~~~~~~
+
+* Updated documentation and list of known RPC errors.
+* The library now treats a lack of ping responses as a network error.
+* `client.kick_participant() <telethon.client.chats.ChatMethods.kick_participant>`
+  now returns the service message about the user being kicked, so you can
+  delete it.
+
+Bug fixes
+~~~~~~~~~
+
+* When editing inline messages, the text parameter is preferred if provided.
+* Additional senders are unconditionally disconnected when disconnecting the
+  main client, which should reduce the amount of asyncio warnings.
+* Automatic reconnection with no retries was failing.
+* :tl:`PhotoPathSize` is now ignored when determining a download size, since
+  this "size" is not a JPEG thumbnail unlike the rest.
+* `events.ChatAction <telethon.events.chataction.ChatAction>` should misbehave
+  less.
+
+
+New layer and QoL improvements (v1.18)
+======================================
+
++------------------------+
+| Scheme layer used: 120 |
++------------------------+
+
+Mostly fixes, and added some new things that can be done in this new layer.
+
+For proxy users, a pull request was merged that will use the ``python-socks``
+library when available for proxy support. This library natively supports
+`asyncio`, so it should work better than the old ``pysocks``. ``pysocks`` will
+still be used if the new library is not available, and both will be handled
+transparently by Telethon so you don't need to worry about it.
+
+Additions
+~~~~~~~~~
+
+* New `client.set_proxy()
+  <telethon.client.telegrambaseclient.TelegramBaseClient.set_proxy>` method
+  which lets you change the proxy without recreating the client. You will need
+  to reconnect for it to take effect, but you won't need to recreate the
+  client. This is also an external contribution.
+* New method to unpin messages `client.unpin_message()
+  <telethon.client.messages.MessageMethods.unpin_message>`.
+
+Enhancements
+~~~~~~~~~~~~
+
+* Empty peers are excluded from the list of dialogs.
+* If the ``python-socks`` library is installed (new optional requirement), it
+  will be used instead of ``pysocks`` for proxy support. This should fix some
+  issues with proxy timeouts, because the new library natively supports
+  `asyncio`.
+* `client.send_file() <telethon.client.uploads.UploadMethods.send_file>` will
+  now group any media type, instead of sending non-image documents separatedly.
+  This lets you create music albums, for example.
+* You can now search messages with a ``from_user`` that's not a user. This is
+  a Telegram feature, we know the name isn't great, but backwards-compatibility
+  has to be kept.
+
+Bug fixes
+~~~~~~~~~
+
+* Fixes related to conversation timeouts.
+* Large dates (over year 2038) now wrap around a 32-bit integer, which is the
+  only way we can represent them to Telegram. Even if "wrong", it makes things
+  not crash, and it's the best we can do with 32-bit dates.
+* The library was accidentally using a deprecated argument in one of its
+  friendly methods, producing a warning.
+* Improvements to the way marked IDs are parsed.
+* ``SlowModeWaitError`` floods are no longer cached.
+* Getting the buttons for a message could fail sometimes.
+* Getting the display name for "forbidden" chats now works.
+* Better handling of errors in some internal methods.
+
+
+Channel comments and Anonymous Admins (v1.17)
+=============================================
+
++------------------------+
+| Scheme layer used: 119 |
++------------------------+
+
+New minor version, new layer change! This time is a good one to remind every
+consumer of Python libraries that **you should always specify fixed versions
+of your dependencies**! If you're using a ``requirements.txt`` file and you
+want to stick with the old version (or any version) for the time being, you
+can `use the following syntax <https://pip.pypa.io/en/stable/user_guide/>`__:
+
+.. code-block:: text
+
+    telethon~=1.16.0
+
+This will install any version compatible with the written version (so, any in
+the ``1.16`` series). Patch releases will never break your code (and if they
+do, it's a bug). You can also use that syntax in ``pip install``. Your code
+can't know what new versions will look like, so saying it will work with all
+versions is a lie and will cause issues.
+
+The reason to bring this up is that Telegram has changed things again, and
+with the introduction of anonymous administrators and channel comments, the
+sender of a message may not be a :tl:`User`! To accomodate for this, the field
+is now a :tl:`Peer` and not `int`. As a reminder, it's always a good idea to
+use Telethon's friendly methods and custom properties, which have a higher
+stability guarantee than accessing raw API fields.
+
+Even if you don't update, your code will still need to account for the fact
+that the sender of a message might be one of the accounts Telegram introduced
+to preserve backwards compatibility, because this is a server-side change, so
+it's better to update and not lag behind. As it's mostly just a single person
+driving the project on their free time, bug-fixes are not backported.
+
+This version also updates the format of SQLite sessions (the default), so
+after upgrading and using an old session, the session will be updated, which
+means trying to use it back in older versions of the library won't work.
+
+For backwards-compatibility sake, the library has introduced the properties
+`Message.reply_to_msg_id <telethon.tl.custom.message.Message.reply_to_msg_id>`
+and `Message.to_id <telethon.tl.custom.message.Message.to_id>` that behave
+like they did before (Telegram has renamed and changed how these fields work).
+
+
+Breaking Changes
+~~~~~~~~~~~~~~~~
+
+* ``Message.from_id`` is now a :tl:`Peer`, not `int`! If you want the marked
+  sender ID (much like old behaviour), replace all uses of ``.from_id`` with
+  ``.sender_id``. This will mostly work, but of course in old and new versions
+  you have to account for the fact that this sender may no longer be a user.
+* You can no longer assign to `Message.reply_to_msg_id
+  <telethon.tl.custom.message.Message.reply_to_msg_id>` and `Message.to_id
+  <telethon.tl.custom.message.Message.to_id>` because these are now properties
+  that offer a "view" to the real value from a different field.
+* Answering inline queries with a ``photo`` or ``document`` will now send the
+  photo or document used in the resulting message by default. Not sending the
+  media was technically a bug, but some people may be relying on this old
+  behaviour. You can use the old behaviour with ``include_media=False``.
+
+Additions
+~~~~~~~~~
+
+* New ``raise_last_call_error`` parameter in the client constructor to raise
+  the same error produced by the last failing call, rather than a generic
+  `ValueError`.
+* New ``formatting_entities`` parameter in `client.send_message()
+  <telethon.client.messages.MessageMethods.send_message>`, and
+  `client.send_file() <telethon.client.uploads.UploadMethods.send_file>`
+  to bypass the parse mode and manually specify the formatting entities.
+* New `client.get_permissions() <telethon.client.chats.ChatMethods.get_permissions>`
+  method to query a participant's permissions in a group or channel. This
+  request is slightly expensive in small group chats because it has to fetch
+  the entire chat to check just a user, so use of a cache is advised.
+* `Message.click() <telethon.tl.custom.message.Message.click>` now works on
+  normal polls!
+* New ``local_addr`` parameter in the client constructor to use a specific
+  local network address when connecting to Telegram.
+* `client.inline_query() <telethon.client.bots.BotMethods.inline_query>` now
+  lets you specify the chat where the query is being made from, which some
+  bots need to provide certain functionality.
+* You can now get comments in a channel post with the ``reply_to`` parameter in
+  `client.iter_messages() <telethon.client.messages.MessageMethods.iter_messages>`.
+  Comments are messages that "reply to" a specific channel message, hence the
+  name (which is consistent with how Telegram's API calls it).
+
+Enhancements
+~~~~~~~~~~~~
+
+* Updated documentation and list of known errors.
+* If ``hachoir`` is available, the file metadata can now be extracted from
+  streams and in-memory bytes.
+* The default parameters used to initialize a connection now match the format
+  of those used by Telegram Desktop.
+* Specifying 0 retries will no longer cause the library to attempt to reconnect.
+* The library should now be able to reliably download very large files.
+* Global search should work more reliably now.
+* Old usernames are evicted from cache, so getting entities by cached username
+  should now be more reliable.
+* Slightly less noisy logs.
+* Stability regarding transport-level errors (transport flood, authorization
+  key not found) should be improved. In particular, you should no longer be
+  getting unnecessarily logged out.
+* Reconnection should no longer occur if the client gets logged out (for
+  example, another client revokes the session).
+
+Bug fixes
+~~~~~~~~~
+
+* In some cases, there were issues when using `events.Album
+  <telethon.events.album.Album>` together with `events.Raw
+  <telethon.events.raw.Raw>`.
+* For some channels, one of their channel photos would not show up in
+  `client.iter_profile_photos() <telethon.client.chats.ChatMethods.iter_profile_photos>`.
+* In some cases, a request that failed to be sent would be forgotten, causing
+  the original caller to be "locked" forever for a response that would never
+  arrive. Failing requests should now consistently be automatically re-sent.
+* The library should more reliably handle certain updates with "empty" data.
+* Sending documents in inline queries should now work fine.
+* Manually using `client.sign_up <telethon.client.auth.AuthMethods.sign_up>`
+  should now work correctly, instead of claiming "code invalid".
+
+Special mention to some of the other changes in the 1.16.x series:
+
+* The ``thumb`` for ``download_media`` now supports both `str` and :tl:`VideoSize`.
+* Thumbnails are sorted, so ``-1`` is always the largest.
+
+
+Bug Fixes (v1.16.1)
+===================
+
+The last release added support to ``force_file`` on any media, including
+things that were not possible before like ``.webp`` files. However, the
+``force_document`` toggle commonly used for photos was applied "twice"
+(one told the library to send it as a document, and then to send that
+document as file), which prevented Telegram for analyzing the images. Long
+story short, sending files to the stickers bot stopped working, but that's
+been fixed now, and sending photos as documents include the size attribute
+again as long as Telegram adds it.
+
+Enhancements
+~~~~~~~~~~~~
+
+* When trying to `client.start() <telethon.client.auth.AuthMethods.start>` to
+  another account if you were previously logged in, the library will now warn
+  you because this is probably not intended. To avoid the warning, make sure
+  you're logging in to the right account or logout from the other first.
+* Sending a copy of messages with polls will now work when possible.
+* The library now automatically retries on inter-dc call errors (which occur
+  when Telegram has internal issues).
+
+Bug Fixes
+~~~~~~~~~
+
+* The aforementioned issue with ``force_document``.
+* Square brackets removed from IPv6 addresses. This may fix IPv6 support.
+
+
+Channel Statistics (v1.16)
+==========================
+
++------------------------+
+| Scheme layer used: 116 |
++------------------------+
+
+The newest Telegram update has a new method to also retrieve megagroup
+statistics, which can now be used with `client.get_stats()
+<telethon.client.chats.ChatMethods.get_stats>`. This way you'll be able
+to access the raw data about your channel or megagroup statistics.
+
+The maximum file size limit has also been increased to 2GB on the server,
+so you can send even larger files.
+
+Breaking Changes
+~~~~~~~~~~~~~~~~
+
+* Besides the obvious layer change, the ``loop`` argument **is now ignored**.
+  It has been deprecated since Python 3.8 and will be removed in Python 3.10,
+  and also caused some annoying warning messages when using certain parts of
+  the library. If you were (incorrectly) relying on using a different loop
+  from the one that was set, things may break.
+
+Enhancements
+~~~~~~~~~~~~
+
+* `client.upload_file() <telethon.client.uploads.UploadMethods.upload_file>`
+  now works better when streaming files (anything that has a ``.read()``),
+  instead of reading it all into memory when possible.
+
+
+QR login (v1.15)
+================
+
+*Published at 2020/07/04*
+
++------------------------+
+| Scheme layer used: 114 |
++------------------------+
+
+The library now has a friendly method to perform QR-login, as detailed in
+https://core.telegram.org/api/qr-login. It won't generate QR images, but it
+provides a way for you to easily do so with any other library of your choice.
+
+Additions
+~~~~~~~~~
+
+* New `client.qr_login() <telethon.client.auth.AuthMethods.qr_login>`.
+* `message.click <telethon.tl.custom.message.Message.click>` now lets you
+  click on buttons requesting phone or location.
+
+Enhancements
+~~~~~~~~~~~~
+
+* Updated documentation and list of known errors.
+* `events.Album <telethon.events.album.Album>` should now handle albums from
+  different data centers more gracefully.
+* `client.download_file()
+  <telethon.client.downloads.DownloadMethods.download_file>` now supports
+  `pathlib.Path` as the destination.
+
+Bug fixes
+~~~~~~~~~
+
+* No longer crash on updates received prior to logging in.
+* Server-side changes caused clicking on inline buttons to trigger a different
+  error, which is now handled correctly.
+
+
+Minor quality of life improvements (v1.14)
+==========================================
+
+*Published at 2020/05/26*
+
++------------------------+
+| Scheme layer used: 113 |
++------------------------+
+
+Some nice things that were missing, along with the usual bug-fixes.
+
+Additions
+~~~~~~~~~
+
+* New `Message.dice <telethon.tl.custom.message.Message.dice>` property.
+* The ``func=`` parameter of events can now be an ``async`` function.
+
+Bug fixes
+~~~~~~~~~
+
+* Fixed `client.action() <telethon.client.chats.ChatMethods.action>`
+  having an alias wrong.
+* Fixed incorrect formatting of some errors.
+* Probably more reliable detection of pin events in small groups.
+* Fixed send methods on `client.conversation()
+  <telethon.client.dialogs.DialogMethods.conversation>` were not honoring
+  cancellation.
+* Flood waits of zero seconds are handled better.
+* Getting the pinned message in a chat was failing.
+* Fixed the return value when forwarding messages if some were missing
+  and also the return value of albums.
+
+Enhancements
+~~~~~~~~~~~~
+
+* ``.tgs`` files are now recognised as animated stickers.
+* The service message produced by `Message.pin()
+  <telethon.tl.custom.message.Message.pin>` is now returned.
+* Sending a file with `client.send_file()
+  <telethon.client.uploads.UploadMethods.send_file>` now works fine when
+  you pass an existing dice media (e.g. sending a message copy).
+* `client.edit_permissions() <telethon.client.chats.ChatMethods.edit_permissions>`
+  now has the ``embed_links`` parameter which was missing.
+
+Bug Fixes (v1.13)
+=================
+
+*Published at 2020/04/25*
+
++------------------------+
+| Scheme layer used: 112 |
++------------------------+
+
+Bug fixes and layer bump.
+
+Bug fixes
+~~~~~~~~~
+
+* Passing ``None`` as the entity to `client.delete_messages()
+  <telethon.client.messages.MessageMethods.delete_messages>` would fail.
+* When downloading a thumbnail, the name inferred was wrong.
+
+Bug Fixes (v1.12)
+=================
+
+*Published at 2020/04/20*
+
++------------------------+
+| Scheme layer used: 111 |
++------------------------+
+
+Once again nothing major, but a few bug fixes and primarily the new layer
+deserves a new minor release.
+
+Bug fixes
+~~~~~~~~~
+
+These were already included in the ``v1.11.3`` patch:
+
+* ``libssl`` check was failing on macOS.
+* Getting input users would sometimes fail on `events.ChatAction
+  <telethon.events.chataction.ChatAction>`.
+
+These bug fixes are available in this release and beyond:
+
+* Avoid another occurrence of `MemoryError`.
+* Sending large files in albums would fail because it tried to cache them.
+* The ``thumb`` was being ignored when sending files from :tl:`InputFile`.
+* Fixed editing inline messages from callback queries in some cases.
+* Proxy connection is now blocking which should help avoid some errors.
+
+
+Bug Fixes (v1.11)
+=================
+
+*Published at 2020/02/20*
+
++------------------------+
+| Scheme layer used: 110 |
++------------------------+
+
+It has been a while since the last release, and a few bug fixes have been
+made since then. This release includes them and updates the scheme layer.
+
+Note that most of the bug-fixes are available in the ``v1.10.10`` patch.
+
+Bug fixes
+~~~~~~~~~
+
+* Fix ``MemoryError`` when casting certain media.
+* Fix `client.get_entity() <telethon.client.users.UserMethods.get_entity>`
+  on small group chats.
+* `client.delete_dialog() <telethon.client.dialogs.DialogMethods.delete_dialog>`
+  now handles deactivated chats more gracefully.
+* Sending a message with ``file=`` would ignore some of the parameters.
+* Errors are now un-pickle-able once again.
+* Fixed some issues regarding markdown and HTML (un)parsing.
+
+The following are also present in ``v1.10.10``:
+
+* Fixed some issues with `events.Album <telethon.events.album.Album>`.
+* Fixed some issues with `client.kick_participant()
+  <telethon.client.chats.ChatMethods.kick_participant>` and
+  `client.edit_admin() <telethon.client.chats.ChatMethods.edit_admin>`.
+* Fixed sending albums and more within `client.conversation()
+  <telethon.client.dialogs.DialogMethods.conversation>`.
+* Fixed some import issues.
+* And a lot more minor stuff.
+
+Enhancements
+~~~~~~~~~~~~
+
+* Videos can now be included when sending albums.
+* Getting updates after reconnect should be more reliable.
+* Updated documentation and added more examples.
+* More security checks during the generation of the authorization key.
+
+The following are also present in ``v1.10.10``:
+
+* URLs like ``t.me/@username`` are now valid.
+* Auto-sleep now works for slow-mode too.
+* Improved some error messages.
+* Some internal improvements and updating.
+* `client.pin_message() <telethon.client.messages.MessageMethods.pin_message>`
+  now also works with message objects.
+* Asynchronous file descriptors are now allowed during download and upload.
+
+
 Scheduled Messages (v1.10)
 ==========================
 
@@ -1314,7 +2331,7 @@ the scenes! This means you're now able to do both of the following:
     async def main():
       await client.send_message('me', 'Hello!')
 
-    asyncio.get_event_loop().run_until_complete(main())
+    asyncio.run(main())
 
     # ...can be rewritten as:
 
@@ -1995,7 +3012,7 @@ Internal changes
 ~~~~~~~~~~~~~~~~
 
 - ``libssl`` is no longer an optional dependency. Use ``cryptg`` instead,
-  which you can find on https://github.com/Lonami/cryptg.
+  which you can find on https://pypi.org/project/cryptg/.
 
 
 
@@ -3428,7 +4445,7 @@ things with the ``InteractiveTelegramClient``:
 - **Download** any message's media (photos, documents or even contacts!).
 - **Receive message updates** as you talk (i.e., someone sent you a message).
 
-It actually is an usable-enough client for your day by day. You could
+It actually is a usable-enough client for your day by day. You could
 even add ``libnotify`` and pop, you're done! A great cli-client with
 desktop notifications.
 

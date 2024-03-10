@@ -55,12 +55,15 @@ class _DialogsIter(RequestIter):
         self.total = getattr(r, 'count', len(r.dialogs))
 
         entities = {utils.get_peer_id(x): x
-                    for x in itertools.chain(r.users, r.chats)}
+                    for x in itertools.chain(r.users, r.chats)
+                    if not isinstance(x, (types.UserEmpty, types.ChatEmpty))}
+
+        self.client._mb_entity_cache.extend(r.users, r.chats)
 
         messages = {}
         for m in r.messages:
             m._finish_init(self.client, entities, None)
-            messages[_dialog_message_key(m.to_id, m.id)] = m
+            messages[_dialog_message_key(m.peer_id, m.id)] = m
 
         for d in r.dialogs:
             # We check the offset date here because Telegram may ignore it
@@ -73,16 +76,24 @@ class _DialogsIter(RequestIter):
             peer_id = utils.get_peer_id(d.peer)
             if peer_id not in self.seen:
                 self.seen.add(peer_id)
+                if peer_id not in entities:
+                    # > In which case can a UserEmpty appear in the list of banned members?
+                    # > In a very rare cases. This is possible but isn't an expected behavior.
+                    # Real world example: https://t.me/TelethonChat/271471
+                    continue
+
                 cd = custom.Dialog(self.client, d, entities, message)
                 if cd.dialog.pts:
-                    self.client._channel_pts[cd.id] = cd.dialog.pts
+                    self.client._message_box.try_set_channel_state(
+                        utils.get_peer_id(d.peer, add_mark=False), cd.dialog.pts)
 
                 if not self.ignore_migrated or getattr(
                         cd.entity, 'migrated_to', None) is None:
                     self.buffer.append(cd)
 
-        if len(r.dialogs) < self.request.limit\
+        if not self.buffer or len(r.dialogs) < self.request.limit\
                 or not isinstance(r, types.messages.DialogsSlice):
+            # Buffer being empty means all returned dialogs were skipped (due to offsets).
             # Less than we requested means we reached the end, or
             # we didn't get a DialogsSlice which means we got all.
             return True
@@ -99,8 +110,7 @@ class _DialogsIter(RequestIter):
         self.request.exclude_pinned = True
         self.request.offset_id = last_message.id if last_message else 0
         self.request.offset_date = last_message.date if last_message else None
-        self.request.offset_peer =\
-            entities[utils.get_peer_id(r.dialogs[-1].peer)]
+        self.request.offset_peer = self.buffer[-1].input_entity
 
 
 class _DraftsIter(RequestIter):
@@ -245,7 +255,7 @@ class DialogMethods:
 
                 # Getting only archived dialogs (both equivalent)
                 archived = await client.get_dialogs(folder=1)
-                non_archived = await client.get_dialogs(archived=True)
+                archived = await client.get_dialogs(archived=True)
         """
         return await self.iter_dialogs(*args, **kwargs).collect()
 
@@ -364,7 +374,7 @@ class DialogMethods:
                 await client.edit_folder(dialogs, [0, 1])
 
                 # Un-archiving all dialogs
-                await client.archive(unpack=1)
+                await client.edit_folder(unpack=1)
         """
         if (entity is None) == (unpack is None):
             raise ValueError('You can only set either entities or unpack, not both')
@@ -450,7 +460,8 @@ class DialogMethods:
         if ty == helpers._EntityType.CHAT and not deactivated:
             try:
                 result = await self(functions.messages.DeleteChatUserRequest(
-                    entity.chat_id, types.InputUserSelf()))
+                    entity.chat_id, types.InputUserSelf(), revoke_history=revoke
+                ))
             except errors.PeerIdInvalidError:
                 # Happens if we didn't have the deactivated information
                 result = None
@@ -474,6 +485,16 @@ class DialogMethods:
         """
         Creates a `Conversation <telethon.tl.custom.conversation.Conversation>`
         with the given entity.
+
+        .. note::
+
+            This Conversation API has certain shortcomings, such as lacking
+            persistence, poor interaction with other event handlers, and
+            overcomplicated usage for anything beyond the simplest case.
+
+            If you plan to interact with a bot without handlers, this works
+            fine, but when running a bot yourself, you may instead prefer
+            to follow the advice from https://stackoverflow.com/a/62246569/.
 
         This is not the same as just sending a message to create a "dialog"
         with them, but rather a way to easily send messages and await for
@@ -569,10 +590,10 @@ class DialogMethods:
                         # <you> Your name didn't have any letters! Try again
                         conv.send_message("Your name didn't have any letters! Try again")
 
-                        # <usr> Lonami
+                        # <usr> Human
                         name = conv.get_response().raw_text
 
-                    # <you> Thanks Lonami!
+                    # <you> Thanks Human!
                     conv.send_message('Thanks {}!'.format(name))
         """
         return custom.Conversation(

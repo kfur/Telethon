@@ -6,7 +6,7 @@ since they seem to count as two characters and it's a bit strange.
 import re
 import warnings
 
-from ..helpers import add_surrogate, del_surrogate, strip_text
+from ..helpers import add_surrogate, del_surrogate, within_surrogate, strip_text
 from ..tl import TLObject
 from ..tl.types import (
     MessageEntityBold, MessageEntityItalic, MessageEntityCode,
@@ -22,7 +22,7 @@ DEFAULT_DELIMITERS = {
     '```': MessageEntityPre
 }
 
-DEFAULT_URL_RE = re.compile(r'\[([\S\s]+?)\]\((.+?)\)')
+DEFAULT_URL_RE = re.compile(r'\[([^\]]+)\]\(([^)]+)\)')
 DEFAULT_URL_FORMAT = '[{0}]({1})'
 
 
@@ -164,13 +164,13 @@ def unparse(text, entities, delimiters=None, url_fmt=None):
     text = add_surrogate(text)
     delimiters = {v: k for k, v in delimiters.items()}
     insert_at = []
-    for entity in entities:
+    for i, entity in enumerate(entities):
         s = entity.offset
         e = entity.offset + entity.length
         delimiter = delimiters.get(type(entity), None)
         if delimiter:
-            insert_at.append((s, delimiter))
-            insert_at.append((e, delimiter))
+            insert_at.append((s, i, delimiter))
+            insert_at.append((e, -i, delimiter))
         else:
             url = None
             if isinstance(entity, MessageEntityTextUrl):
@@ -178,18 +178,18 @@ def unparse(text, entities, delimiters=None, url_fmt=None):
             elif isinstance(entity, MessageEntityMentionName):
                 url = 'tg://user?id={}'.format(entity.user_id)
             if url:
-                insert_at.append((s, '['))
-                insert_at.append((e, ']({})'.format(url)))
+                insert_at.append((s, i, '['))
+                insert_at.append((e, -i, ']({})'.format(url)))
 
-    insert_at.sort(key=lambda t: t[0])
+    insert_at.sort(key=lambda t: (t[0], t[1]))
     while insert_at:
-        at, what = insert_at.pop()
+        at, _, what = insert_at.pop()
 
-        # If we are in the middle of a surrogate nudge the position by +1.
+        # If we are in the middle of a surrogate nudge the position by -1.
         # Otherwise we would end up with malformed text and fail to encode.
         # For example of bad input: "Hi \ud83d\ude1c"
         # https://en.wikipedia.org/wiki/UTF-16#U+010000_to_U+10FFFF
-        while at < len(text) and '\ud800' <= text[at] <= '\udfff':
+        while within_surrogate(text, at):
             at += 1
 
         text = text[:at] + what + text[at:]
