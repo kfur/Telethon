@@ -37,7 +37,7 @@ class GzipPacked(TLObject):
     def read(reader):
         constructor = reader.read_int(signed=False)
         assert constructor == GzipPacked.CONSTRUCTOR_ID
-        return gzip.decompress(reader.tgread_bytes())
+        return decompress(reader.tgread_bytes())
 
     @classmethod
     def from_reader(cls, reader):
