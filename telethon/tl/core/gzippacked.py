@@ -1,7 +1,9 @@
 try:
-    from isal import igzip as gzip
+    from isal.igzip import decompress
 except:
-    import gzip
+    from gzip import decompress
+
+import gzip
 import struct
 
 from .. import TLObject
@@ -39,7 +41,7 @@ class GzipPacked(TLObject):
 
     @classmethod
     def from_reader(cls, reader):
-        return GzipPacked(gzip.decompress(reader.tgread_bytes()))
+        return GzipPacked(decompress(reader.tgread_bytes()))
 
     def to_dict(self):
         return {
