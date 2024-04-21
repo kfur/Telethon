@@ -21,7 +21,7 @@ class MessagePacker:
     encryption and network overhead also is smaller. It's also a central
     point where outgoing requests are put, and where ready-messages are get.
     """
-
+    __slots__ = ('_state', '_deque', '_ready', '_log')
     def __init__(self, state, loggers):
         self._state = state
         self._deque = collections.deque()
