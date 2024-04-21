@@ -19,6 +19,7 @@ class BinaryReader:
     """
     Small utility class to read binary data.
     """
+    __slots__ = ('stream', '_last')
 
     def __init__(self, data):
         self.stream = BytesIO(data)
