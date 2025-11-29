@@ -32,7 +32,7 @@ def _json_default(value):
 
 
 class TLObject:
-    __slots__ = ()
+    __slots__ = ('_client', '_text', '_entities', '_self_outgoing', '_sender_id', '_chat_id')
     CONSTRUCTOR_ID = None
     SUBCLASS_OF_ID = None
 
