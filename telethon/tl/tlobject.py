@@ -32,6 +32,7 @@ def _json_default(value):
 
 
 class TLObject:
+    __slots__ = ()
     CONSTRUCTOR_ID = None
     SUBCLASS_OF_ID = None
 
@@ -243,6 +244,7 @@ class TLObject:
 
 
 class TLRequest(TLObject):
+    __slots__ = ()
     """
     Represents a content-related `TLObject` (a request that can be sent).
     """
