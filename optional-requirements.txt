@@ -1,5 +1,5 @@
 cryptg
-pysocks
 python-socks[asyncio]
 hachoir
 pillow
+isal

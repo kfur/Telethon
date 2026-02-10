@@ -1,9 +1,7 @@
 try:
-    from isal.igzip import decompress
-except:
-    from gzip import decompress
-
-import gzip
+    from isal import igzip as gzip
+except ImportError:
+    import gzip
 import struct
 
 from .. import TLObject
@@ -31,17 +29,17 @@ class GzipPacked(TLObject):
 
     def __bytes__(self):
         return struct.pack('<I', GzipPacked.CONSTRUCTOR_ID) + \
-               TLObject.serialize_bytes(gzip.compress(self.data, compresslevel=0))
+               TLObject.serialize_bytes(gzip.compress(self.data))
 
     @staticmethod
     def read(reader):
         constructor = reader.read_int(signed=False)
         assert constructor == GzipPacked.CONSTRUCTOR_ID
-        return decompress(reader.tgread_bytes())
+        return gzip.decompress(reader.tgread_bytes())
 
     @classmethod
     def from_reader(cls, reader):
-        return GzipPacked(decompress(reader.tgread_bytes()))
+        return GzipPacked(gzip.decompress(reader.tgread_bytes()))
 
     def to_dict(self):
         return {

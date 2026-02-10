@@ -9,7 +9,16 @@ import typing
 import logging
 import warnings
 from collections import deque
-import sqlite3
+
+try:
+    import sqlite3
+
+    OperationalError = sqlite3.OperationalError
+except ImportError as e:
+    sqlite3 = None
+
+    class OperationalError(Exception):
+        pass  # won't be created and thus never caught
 
 from .. import events, utils, errors
 from ..events.common import EventBuilder, EventCommon
@@ -289,7 +298,7 @@ class UpdateMethods:
                         len(self._mb_entity_cache),
                         self._entity_cache_limit
                     )
-                    self._save_states_and_entities()
+                    await self._save_states_and_entities()
                     self._mb_entity_cache.retain(lambda id: id == self._mb_entity_cache.self_id or id in self._message_box.map)
                     if len(self._mb_entity_cache) >= self._entity_cache_limit:
                         warnings.warn('in-memory entities exceed entity_cache_limit after flushing; consider setting a larger limit')
@@ -325,13 +334,22 @@ class UpdateMethods:
                             await self.disconnect()
                             break
                         continue
-                    except (errors.TypeNotFoundError, sqlite3.OperationalError) as e:
+                    except (errors.TypeNotFoundError, OperationalError) as e:
                         # User is likely doing weird things with their account or session and Telegram gets confused as to what layer they use
                         self._log[__name__].warning('Cannot get difference since the account is likely misusing the session: %s', e)
                         self._message_box.end_difference()
                         self._updates_error = e
                         await self.disconnect()
                         break
+                    except errors.RPCError as e:
+                        # Fallback; treat as transient error (the amount of "fatal errors" reported seem to indicate this is most likely what we need to do)
+                        self._log[__name__].warning(
+                            "Cannot get difference due to unexpected error (this may be a bug "
+                            f"in Telethon v{__version__} in that it could be handled better, but it's unlikely): %s",
+                            e
+                        )
+                        self._message_box.end_difference()
+                        continue
                     except OSError as e:
                         # Network is likely down, but it's unclear for how long.
                         # If disconnect is called this task will be cancelled along with the sleep.
@@ -343,7 +361,8 @@ class UpdateMethods:
                     if updates:
                         self._log[__name__].info('Got difference for account updates')
 
-                    updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
+                    _preprocess_updates = await self._preprocess_updates(updates, users, chats)
+                    updates_to_dispatch.extend(_preprocess_updates)
                     continue
 
                 get_diff = self._message_box.get_channel_difference(self._mb_entity_cache)
@@ -367,7 +386,7 @@ class UpdateMethods:
                             await self.disconnect()
                             break
                         continue
-                    except (errors.TypeNotFoundError, sqlite3.OperationalError) as e:
+                    except (errors.TypeNotFoundError, OperationalError) as e:
                         self._log[__name__].warning(
                             'Cannot get difference for channel %s since the account is likely misusing the session: %s',
                             get_diff.channel.channel_id, e
@@ -429,6 +448,19 @@ class UpdateMethods:
                             self._mb_entity_cache
                         )
                         continue
+                    except errors.RPCError as e:
+                        # Fallback; treat as transient error (the amount of "fatal errors" reported seem to indicate this is most likely what we need to do)
+                        self._log[__name__].warning(
+                            "Cannot get difference for channel %d due to unexpected error (this may be a bug "
+                            f"in Telethon v{__version__} in that it could be handled better, but it's unlikely): %s",
+                            get_diff.channel.channel_id, e
+                        )
+                        self._message_box.end_channel_difference(
+                            get_diff,
+                            PrematureEndReason.TEMPORARY_SERVER_ISSUES,
+                            self._mb_entity_cache
+                        )
+                        continue
                     except OSError as e:
                         self._log[__name__].info(
                             'Cannot get difference for channel %d since the network is down: %s: %s',
@@ -441,7 +473,8 @@ class UpdateMethods:
                     if updates:
                         self._log[__name__].info('Got difference for channel %d updates', get_diff.channel.channel_id)
 
-                    updates_to_dispatch.extend(self._preprocess_updates(updates, users, chats))
+                    _preprocess_updates = await self._preprocess_updates(updates, users, chats)
+                    updates_to_dispatch.extend(_preprocess_updates)
                     continue
 
                 deadline = self._message_box.check_deadlines()
@@ -462,7 +495,8 @@ class UpdateMethods:
                 except GapError:
                     continue  # get(_channel)_difference will start returning requests
 
-                updates_to_dispatch.extend(self._preprocess_updates(processed, users, chats))
+                _preprocess_updates = await self._preprocess_updates(processed, users, chats)
+                updates_to_dispatch.extend(_preprocess_updates)
         except asyncio.CancelledError:
             pass
         except Exception as e:
@@ -470,8 +504,9 @@ class UpdateMethods:
             self._updates_error = e
             await self.disconnect()
 
-    def _preprocess_updates(self, updates, users, chats):
+    async def _preprocess_updates(self, updates, users, chats):
         self._mb_entity_cache.extend(users, chats)
+        await utils.maybe_async(self.session.process_entities(types.contacts.ResolvedPeer(None, users, chats)))
         entities = {utils.get_peer_id(x): x
                     for x in itertools.chain(users, chats)}
         for u in updates:
@@ -514,9 +549,9 @@ class UpdateMethods:
             # inserted because this is a rather expensive operation
             # (default's sqlite3 takes ~0.1s to commit changes). Do
             # it every minute instead. No-op if there's nothing new.
-            self._save_states_and_entities()
+            await self._save_states_and_entities()
 
-            self.session.save()
+            await utils.maybe_async(self.session.save())
 
     async def _dispatch_update(self: 'TelegramClient', update):
         # TODO only used for AlbumHack, and MessageBox is not really designed for this
