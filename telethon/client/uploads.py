@@ -574,23 +574,17 @@ class UploadMethods:
         random_ids = [m.random_id for m in media]
         return self._get_response_message(random_ids, result, entity)
 
-    async def upload_file(
+
+async def upload_file(
             self: 'TelegramClient',
             file: 'hints.FileLike',
             *,
             part_size_kb: float = None,
-            file_size: int = None,
             file_name: str = None,
             use_cache: type = None,
-            key: bytes = None,
-            iv: bytes = None,
-            progress_callback: 'hints.ProgressCallback' = None) -> 'types.TypeInputFile':
+            progress_callback: 'hints.ProgressCallback' = None, file_size=None, http_headers=None) -> 'types.TypeInputFile':
         """
         Uploads a file to Telegram's servers, without sending it.
-
-        .. note::
-
-            Generally, you want to use `send_file` instead.
 
         This method returns a handle (an instance of :tl:`InputFile` or
         :tl:`InputFileBig`, as required) which can be later used before
@@ -611,13 +605,6 @@ class UploadMethods:
                 Chunk size when uploading files. The larger, the less
                 requests will be made (up to 512KB maximum).
 
-            file_size (`int`, optional):
-                The size of the file to be uploaded, which will be determined
-                automatically if not specified.
-
-                If the file size can't be determined beforehand, the entire
-                file will be read in-memory to find out how large it is.
-
             file_name (`str`, optional):
                 The file name which will be used on the resulting InputFile.
                 If not specified, the name will be taken from the ``file``
@@ -628,22 +615,9 @@ class UploadMethods:
                 backward-compatibility (and it may get its use back in
                 the future).
 
-            key ('bytes', optional):
-                In case of an encrypted upload (secret chats) a key is supplied
-
-            iv ('bytes', optional):
-                In case of an encrypted upload (secret chats) an iv is supplied
-
             progress_callback (`callable`, optional):
                 A callback function accepting two parameters:
                 ``(sent bytes, total)``.
-
-                When sending an album, the callback will receive a number
-                between 0 and the amount of files as the "sent" parameter,
-                and the amount of files as the "total". Note that the first
-                parameter will be a floating point number to indicate progress
-                within a file (e.g. ``2.5`` means it has sent 50% of the third
-                file, because it's between 2 and 3).
 
         Returns
             :tl:`InputFileBig` if the file size is larger than 10MB,
@@ -669,91 +643,151 @@ class UploadMethods:
         if isinstance(file, (types.InputFile, types.InputFileBig)):
             return file  # Already uploaded
 
-        pos = 0
-        async with helpers._FileStream(file, file_size=file_size) as stream:
-            # Opening the stream will determine the correct file size
-            file_size = stream.file_size
+        if file_size is None:
+            if isinstance(file, str):
+                if os.path.isfile(file):
+                    file_size = os.path.getsize(file)
+                else:
+                    stream = req.urlopen(file)
+                    file_size = int(stream.headers['Content-Length'])
+            elif isinstance(file, (bytes, bytearray)):
+                file_size = len(file)
+            elif hasattr(file, 'tell') and hasattr(file, 'read') and hasattr(file, 'seek'):
+                # `aiofiles` shouldn't base `IOBase` because they change the
+                # methods' definition. `seekable` would be `async` but since
+                # we won't get to check that, there's no need to maybe-await.
+                if isinstance(file, io.IOBase) and file.seekable():
+                    pos = file.tell()
+                else:
+                    pos = None
 
-            if not part_size_kb:
-                part_size_kb = utils.get_appropriated_part_size(file_size)
+                # TODO Don't load the entire file in memory always
+                data = file.read()
+                if inspect.isawaitable(data):
+                    data = await data
 
-            if part_size_kb > 512:
-                raise ValueError('The part size must be less or equal to 512KB')
+                if pos is not None:
+                    file.seek(pos)
 
-            part_size = int(part_size_kb * 1024)
-            if part_size % 1024 != 0:
-                raise ValueError(
-                    'The part size must be evenly divisible by 1024')
-
-            # Set a default file name if None was specified
-            file_id = helpers.generate_random_long()
-            if not file_name:
-                file_name = stream.name or str(file_id)
-
-            # If the file name lacks extension, add it if possible.
-            # Else Telegram complains with `PHOTO_EXT_INVALID_ERROR`
-            # even if the uploaded image is indeed a photo.
-            if not os.path.splitext(file_name)[-1]:
-                file_name += utils._get_extension(stream)
-
-            # Determine whether the file is too big (over 10MB) or not
-            # Telegram does make a distinction between smaller or larger files
-            is_big = file_size > 10 * 1024 * 1024
-            hash_md5 = hashlib.md5()
-
-            part_count = (file_size + part_size - 1) // part_size
-            self._log[__name__].info('Uploading file of %d bytes in %d chunks of %d',
-                                     file_size, part_count, part_size)
-
-            pos = 0
-            for part_index in range(part_count):
-                # Read the file by in chunks of size part_size
-                part = await helpers._maybe_await(stream.read(part_size))
-
-                if not isinstance(part, bytes):
+                if not isinstance(data, (bytes, bytearray)):
                     raise TypeError(
                         'file descriptor returned {}, not bytes (you must '
-                        'open the file in bytes mode)'.format(type(part)))
+                        'open the file in bytes mode)'.format(type(data)))
 
-                # `file_size` could be wrong in which case `part` may not be
-                # `part_size` before reaching the end.
-                if len(part) != part_size and part_index < part_count - 1:
-                    raise ValueError(
-                        'read less than {} before reaching the end; either '
-                        '`file_size` or `read` are wrong'.format(part_size))
+                file = data
+                file_size = len(file)
 
-                pos += len(part)
+            else:
+                raise Exception('file size required for uploading')
 
-                # Encryption part if needed
-                if key and iv:
-                    part = AES.encrypt_ige(part, key, iv)
+        # File will now either be a string or bytes
+        if not part_size_kb:
+            part_size_kb = utils.get_appropriated_part_size(file_size)
 
-                if not is_big:
-                    # Bit odd that MD5 is only needed for small files and not
-                    # big ones with more chance for corruption, but that's
-                    # what Telegram wants.
-                    hash_md5.update(part)
+        if part_size_kb > 512:
+            raise ValueError('The part size must be less or equal to 512KB')
 
-                # The SavePartRequest is different depending on whether
-                # the file is too large or not (over or less than 10MB)
-                if is_big:
-                    request = functions.upload.SaveBigFilePartRequest(
-                        file_id, part_index, part_count, part)
+        part_size = int(part_size_kb * 1024)
+        if part_size % 1024 != 0:
+            raise ValueError(
+                'The part size must be evenly divisible by 1024')
+
+        # Set a default file name if None was specified
+        file_id = helpers.generate_random_long()
+        if not file_name:
+            if isinstance(file, str):
+                file_name = os.path.basename(file)
+            else:
+                file_name = str(file_id)
+
+        # If the file name lacks extension, add it if possible.
+        # Else Telegram complains with `PHOTO_EXT_INVALID_ERROR`
+        # even if the uploaded image is indeed a photo.
+        if not os.path.splitext(file_name)[-1]:
+            file_name += utils._get_extension(file)
+
+        # Determine whether the file is too big (over 10MB) or not
+        # Telegram does make a distinction between smaller or larger files
+        is_large = file_size > 10 * 1024 * 1024
+        hash_md5 = hashlib.md5()
+        if not is_large:
+            # Calculate the MD5 hash before anything else.
+            # As this needs to be done always for small files,
+            # might as well do it before anything else and
+            # check the cache.
+            if isinstance(file, str) and os.path.isfile(file):
+                with open(file, 'rb') as stream:
+                    file = stream.read()
+            elif hasattr(file, 'read'):
+                if inspect.iscoroutinefunction(file.read):
+                    file = await file.read()
                 else:
-                    request = functions.upload.SaveFilePartRequest(
-                        file_id, part_index, part)
+                    file = file.read()
+                    if inspect.isawaitable(file):
+                        file = await file
+            elif isinstance(file, str):
+                get_req = req.Request(file, method='GET', headers=http_headers)
+                with req.urlopen(get_req) as resp:
+                    file = resp.read()
+            file_size = len(file)
+            hash_md5.update(file)
 
-                result = await self(request)
-                if result:
-                    self._log[__name__].debug('Uploaded %d/%d',
-                                              part_index + 1, part_count)
-                    if progress_callback:
-                        await helpers._maybe_await(progress_callback(pos, file_size))
+        part_count = int((file_size + part_size - 1) // part_size)
+        self._log[__name__].info('Uploading file of %d bytes in %d chunks of %d',
+                                 file_size, part_count, part_size)
+
+        if isinstance(file, str) and os.path.isfile(file):
+            stream = open(file, mode='rb')
+        elif hasattr(file, 'read'):
+            stream = file
+        elif isinstance(file, (bytes, bytearray)):
+            stream = BytesIO(file)
+        else:
+            get_req = req.Request(file, method='GET', headers=http_headers)
+            stream = req.urlopen(get_req)
+
+        for part_index in range(part_count):
+            # Read the file by in chunks of size part_size
+            # part = out_proc.stdout.read(part_size)
+            part = None
+            if hasattr(stream, 'read'):
+                if inspect.iscoroutinefunction(stream.read):
+                    part = await stream.read(part_size)
                 else:
-                    raise RuntimeError(
-                        'Failed to upload file part {}.'.format(part_index))
+                    part = stream.read(part_size)
+                    if inspect.isawaitable(part):
+                        part = await part
+            else:
+                raise Exception(
+                    "Failed read from stream, there aren't read attribute")
+            # part = stream.read(part_size)
+            if len(part) == 0:
+                part_count = part_index
+                break
+            if len(part) != part_size and part_index != part_count - 1:
+                part_count = part_index + 1
+            # The SavePartRequest is different depending on whether
+            # the file is too large or not (over or less than 10MB)
+            if is_large:
+                request = functions.upload.SaveBigFilePartRequest(
+                    file_id, part_index, part_count, part)
+            else:
+                request = functions.upload.SaveFilePartRequest(
+                    file_id, part_index, part)
 
-        if is_big:
+            result = await self(request)
+            if result:
+                self._log[__name__].debug('Uploaded %d/%d',
+                                          part_index + 1, part_count)
+                if progress_callback:
+                    r = progress_callback(stream.tell(), file_size)
+                    if inspect.isawaitable(r):
+                        await r
+            else:
+                raise RuntimeError(
+                    'Failed to upload file part {}.'.format(part_index))
+
+        if is_large:
             return types.InputFileBig(file_id, part_count, file_name)
         else:
             return custom.InputSizedFile(
