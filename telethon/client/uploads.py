@@ -575,7 +575,7 @@ class UploadMethods:
         return self._get_response_message(random_ids, result, entity)
 
 
-async def upload_file(
+    async def upload_file(
             self: 'TelegramClient',
             file: 'hints.FileLike',
             *,
