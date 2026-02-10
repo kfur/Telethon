@@ -5,7 +5,9 @@ import os
 import pathlib
 import re
 import typing
+import inspect
 from io import BytesIO
+from urllib import request as req
 
 from ..crypto import AES
 
