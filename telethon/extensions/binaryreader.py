@@ -17,7 +17,7 @@ class BinaryReader:
     """
     Small utility class to read binary data.
     """
-    __slots__ = ('stream', '_last')
+    __slots__ = ('stream', '_last', 'position')
 
     def __init__(self, data):
         self.stream = data or b''
