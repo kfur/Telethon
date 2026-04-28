@@ -1,5 +1,6 @@
 import struct
 from zlib import crc32
+import asyncio
 
 from .connection import Connection, PacketCodec
 from ...errors import InvalidChecksumError, InvalidBufferError
