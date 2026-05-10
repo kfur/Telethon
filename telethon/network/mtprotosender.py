@@ -687,7 +687,7 @@ class MTProtoSender:
             return
 
         self._log.debug('Handling update %s', message.obj.__class__.__name__)
-        self._updates_queue.put_nowait(message.obj)
+        #self._updates_queue.put_nowait(message.obj)
 
     def _store_own_updates(self, obj, *, _update_ids=frozenset((
         _tl.UpdateShortMessage.CONSTRUCTOR_ID,
@@ -704,7 +704,7 @@ class MTProtoSender:
         try:
             if obj.CONSTRUCTOR_ID in _update_ids:
                 obj._self_outgoing = True  # flag to only process, but not dispatch these
-                self._updates_queue.put_nowait(obj)
+                #self._updates_queue.put_nowait(obj)
             elif obj.CONSTRUCTOR_ID in _update_like_ids:
                 # Ugly "hack" (?) - otherwise bots reliably detect gaps when deleting messages.
                 #
@@ -720,10 +720,10 @@ class MTProtoSender:
                     datetime.datetime(*time.gmtime(0)[:6]).replace(tzinfo=datetime.timezone.utc)
                 )
                 upd._self_outgoing = True
-                self._updates_queue.put_nowait(upd)
+                #self._updates_queue.put_nowait(upd)
             elif obj.CONSTRUCTOR_ID == _tl.messages.InvitedUsers.CONSTRUCTOR_ID:
                 obj.updates._self_outgoing = True
-                self._updates_queue.put_nowait(obj.updates)
+                #self._updates_queue.put_nowait(obj.updates)
 
         except AttributeError:
             pass
