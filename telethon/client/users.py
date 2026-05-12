@@ -442,8 +442,11 @@ class UserMethods:
 
         # Only network left to try
         if isinstance(peer, str):
-            return utils.get_input_peer(
-                await self._get_entity_from_string(peer))
+            ent = await self._get_entity_from_string(peer)
+            ip = utils.get_input_peer(ent)
+            # Persist to disk (session) and warm in-memory cache
+            await utils.maybe_async(self.session.process_entities(ent))
+            return ip
 
         # If we're a bot and the user has messaged us privately users.getUsers
         # will work with access_hash = 0. Similar for channels.getChannels.
@@ -457,17 +460,18 @@ class UserMethods:
                 # If the user passed a valid ID they expect to work for
                 # channels but would be valid for users, we get UserEmpty.
                 # Avoid returning the invalid empty input peer for that.
-                #
-                # We *could* try to guess if it's a channel first, and if
-                # it's not, work as a chat and try to validate it through
-                # another request, but that becomes too much work.
+                # Persist to disk and warm in-memory cache
+                await utils.maybe_async(self.session.process_entities(users))
                 return utils.get_input_peer(users[0])
+
         elif isinstance(peer, types.PeerChat):
             return types.InputPeerChat(peer.chat_id)
         elif isinstance(peer, types.PeerChannel):
             try:
                 channels = await self(functions.channels.GetChannelsRequest([
                     types.InputChannel(peer.channel_id, access_hash=0)]))
+                # Persist to disk and warm in-memory cache
+                await utils.maybe_async(self.session.process_entities(channels))
                 return utils.get_input_peer(channels.chats[0])
             except errors.ChannelInvalidError:
                 pass

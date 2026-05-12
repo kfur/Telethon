@@ -616,7 +616,8 @@ class TelegramBaseClient(abc.ABC):
             if me:
                 await self._on_login(me)  # also calls GetState to initialize the MessageBox
 
-        self._updates_handle = self.loop.create_task(self._update_loop())
+        if not self._no_updates:
+            self._updates_handle = self.loop.create_task(self._update_loop())
         self._keepalive_handle = self.loop.create_task(self._keepalive_loop())
 
     def is_connected(self: 'TelegramClient') -> bool:
